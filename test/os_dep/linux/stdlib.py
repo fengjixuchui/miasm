@@ -33,8 +33,8 @@ class TestLinuxStdlib(unittest.TestCase):
         jit.push_uint32_t(buf)
         jit.push_uint32_t(0) # ret_ad
         stdlib.xxx_sprintf(jit)
-        ret = jit.get_str_ansi(buf)
-        self.assertEqual(ret, b"'coucou' 1111")
+        ret = jit.get_c_str(buf)
+        self.assertEqual(ret, "'coucou' 1111")
 
 
 if __name__ == '__main__':

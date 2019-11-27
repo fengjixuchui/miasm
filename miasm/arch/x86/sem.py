@@ -28,7 +28,7 @@ from miasm.arch.x86.arch import mn_x86, repeat_mn, replace_regs
 from miasm.ir.ir import IntermediateRepresentation, IRBlock, AssignBlock
 from miasm.core.sembuilder import SemBuilder
 from miasm.jitter.csts import EXCEPT_DIV_BY_ZERO, EXCEPT_ILLEGAL_INSN, \
-    EXCEPT_PRIV_INSN, EXCEPT_SOFT_BP, EXCEPT_INT_XX
+    EXCEPT_PRIV_INSN, EXCEPT_SOFT_BP, EXCEPT_INT_XX, EXCEPT_INT_1
 import math
 import struct
 
@@ -1400,7 +1400,7 @@ def call(ir, instr, dst):
             m2 = base.zeroExtend(meip.size)
         elif dst.op == "far":
             # Far call far [eax]
-            addr = dst.args[0].arg
+            addr = dst.args[0].ptr
             m1 = ir.ExprMem(addr, CS.size)
             m2 = ir.ExprMem(addr + m2_expr.ExprInt(2, addr.size), meip.size)
         else:
@@ -1528,7 +1528,7 @@ def jmp(ir, instr, dst):
             m2 = base.zeroExtend(meip.size)
         elif dst.op == "far":
             # Far jmp far [eax]
-            addr = dst.args[0].arg
+            addr = dst.args[0].ptr
             m1 = ir.ExprMem(addr, CS.size)
             m2 = ir.ExprMem(addr + m2_expr.ExprInt(2, addr.size), meip.size)
         else:
@@ -2625,7 +2625,7 @@ def fnstenv(ir, instr, dst):
     e.append(m2_expr.ExprAssign(ad, float_control))
     ad = ir.ExprMem(
         dst.ptr + m2_expr.ExprInt(
-            size // (8 * 1),
+            (size // 8) * 1,
             dst.ptr.size
         ),
         size=16
@@ -2633,7 +2633,7 @@ def fnstenv(ir, instr, dst):
     e.append(m2_expr.ExprAssign(ad, status_word))
     ad = ir.ExprMem(
         dst.ptr + m2_expr.ExprInt(
-            size // (8 * 3),
+            (size // 8) * 3,
             dst.ptr.size
         ),
         size=size
@@ -2641,7 +2641,7 @@ def fnstenv(ir, instr, dst):
     e.append(m2_expr.ExprAssign(ad, float_eip[:size]))
     ad = ir.ExprMem(
         dst.ptr + m2_expr.ExprInt(
-            size // (8 * 4),
+            (size // 8) * 4,
             dst.ptr.size
         ),
         size=16
@@ -2649,7 +2649,7 @@ def fnstenv(ir, instr, dst):
     e.append(m2_expr.ExprAssign(ad, float_cs))
     ad = ir.ExprMem(
         dst.ptr + m2_expr.ExprInt(
-            size // (8 * 5),
+            (size // 8) * 5,
             dst.ptr.size
         ),
         size=size
@@ -2657,7 +2657,7 @@ def fnstenv(ir, instr, dst):
     e.append(m2_expr.ExprAssign(ad, float_address[:size]))
     ad = ir.ExprMem(
         dst.ptr + m2_expr.ExprInt(
-            size // (8 * 6),
+            (size // 8) * 6,
             dst.ptr.size
         ),
         size=16
@@ -3386,7 +3386,9 @@ def icebp(_, instr):
 def l_int(_, instr, src):
     e = []
     # XXX
-    if src.arg in [1, 3]:
+    if src.arg == 1:
+        except_int = EXCEPT_INT_1
+    elif src.arg == 3:
         except_int = EXCEPT_SOFT_BP
     else:
         except_int = EXCEPT_INT_XX
@@ -5078,6 +5080,33 @@ def movmskpd(ir, instr, dst, src):
         out.append(src[(64 * i) + 63:(64 * i) + 64])
     return [m2_expr.ExprAssign(dst, m2_expr.ExprCompose(*out).zeroExtend(dst.size))], []
 
+def _roundscalar(ir, inst, dst, src, imm8, double):
+    res = None
+    ctl = int(imm8)
+    dst_expr = dst[:64] if double else dst[:32]
+    src_expr = src[:64] if double else src[:32]
+    if ctl & 0x4 != 0:
+        # Use MXCSR rounding config
+        # TODO: here we assume it's round to nearest, ties to even
+        res = m2_expr.ExprOp('fpround_towardsnearest', src_expr)
+    else:
+        # Use encoded rounding mechanism
+        rounding_mechanism = ctl & 0x3
+        ROUNDING_MODE = {
+            0x0: 'fpround_towardsnearest',
+            0x1: 'fpround_down',
+            0x2: 'fpround_up',
+            0x3: 'fpround_towardszero'
+        }
+        res = m2_expr.ExprOp(ROUNDING_MODE[rounding_mechanism], src_expr)
+    return [m2_expr.ExprAssign(dst_expr, res)], []
+
+def roundss(ir, inst, dst, src, imm8):
+    return _roundscalar(ir, inst, dst, src, imm8, False)
+
+def roundsd(ir, inst, dst, src, imm8):
+    return _roundscalar(ir, inst, dst, src, imm8, True)
+
 def fxsave(_ir, _instr, _src):
     # Implemented as a NOP for now
     return [], []
@@ -5521,6 +5550,10 @@ mnemo_func = {'mov': mov,
               "divps": divps,
               "divpd": divpd,
 
+              # Rounding
+              "roundss": roundss,
+              "roundsd": roundsd,
+
               # Comparisons (floating-point)
               #
               "minps": minps,
@@ -5753,7 +5786,7 @@ class ir_x86_16(IntermediateRepresentation):
             instr.name.lower()](self, instr, *args)
         self.mod_pc(instr, instr_ir, extra_ir)
         instr.additional_info.except_on_instr = False
-        if instr.additional_info.g1.value & 6 == 0 or \
+        if instr.additional_info.g1.value & 14 == 0 or \
                 not instr.name in repeat_mn:
             return instr_ir, extra_ir
         if instr.name == "MOVSD" and len(instr.args) == 2:

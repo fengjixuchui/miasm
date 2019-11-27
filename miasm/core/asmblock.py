@@ -176,19 +176,19 @@ class AsmBlock(object):
         offset = loc_db.get_location_offset(loc_key)
         if offset not in offsets:
             log_asmblock.warning(
-                'cannot split bloc at %X ' % offset +
+                'cannot split block at %X ' % offset +
                 'middle instruction? default middle')
             offsets.sort()
             return None
-        new_bloc = AsmBlock(loc_key)
+        new_block = AsmBlock(loc_key)
         i = offsets.index(offset)
 
-        self.lines, new_bloc.lines = self.lines[:i], self.lines[i:]
+        self.lines, new_block.lines = self.lines[:i], self.lines[i:]
         flow_mod_instr = self.get_flow_instr()
         log_asmblock.debug('flow mod %r', flow_mod_instr)
         c = AsmConstraint(loc_key, AsmConstraint.c_next)
-        # move dst if flowgraph modifier was in original bloc
-        # (usecase: split delayslot bloc)
+        # move dst if flowgraph modifier was in original block
+        # (usecase: split delayslot block)
         if flow_mod_instr:
             for xx in self.bto:
                 log_asmblock.debug('lbl %s', xx)
@@ -197,11 +197,11 @@ class AsmBlock(object):
             )
             c_to = [x for x in self.bto if x.c_t != AsmConstraint.c_next]
             self.bto = set([c] + c_to)
-            new_bloc.bto = c_next
+            new_block.bto = c_next
         else:
-            new_bloc.bto = self.bto
+            new_block.bto = self.bto
             self.bto = set([c])
-        return new_bloc
+        return new_block
 
     def get_range(self):
         """Returns the offset hull of an AsmBlock"""
@@ -738,7 +738,7 @@ class AsmCFG(DiGraph):
                              if dloc_key == loc_key)
 
             if len(pred_next) > 1:
-                raise RuntimeError("Too many next constraints for bloc %r"
+                raise RuntimeError("Too many next constraints for block %r"
                                    "(%s)" % (loc_key,
                                              pred_next))
 
@@ -1227,8 +1227,23 @@ def assemble_block(mnemo, block, loc_db, conservative=False):
             instr.fixDstOffset()
 
         old_l = instr.l
-        cached_candidate, _ = conservative_asm(mnemo, instr, loc_db,
-                                               conservative)
+        cached_candidate, _ = conservative_asm(
+            mnemo, instr, loc_db,
+            conservative
+        )
+        if len(cached_candidate) != instr.l:
+            # The output instruction length is different from the one we guessed
+            # Retry assembly with updated length
+            instr.l = len(cached_candidate)
+            instr.args = saved_args
+            instr.args = instr.resolve_args_with_symbols(loc_db)
+            if instr.dstflow():
+                instr.fixDstOffset()
+            cached_candidate, _ = conservative_asm(
+                mnemo, instr, loc_db,
+                conservative
+            )
+            assert len(cached_candidate) == instr.l
 
         # Restore original arguments
         instr.args = saved_args
@@ -1570,7 +1585,7 @@ class disasmEngine(object):
         warnings.warn('DEPRECATION WARNING: use "dis_block" instead of "dis_bloc"')
         return self.dis_block(offset)
 
-    def dis_multiblock(self, offset, blocks=None):
+    def dis_multiblock(self, offset, blocks=None, job_done=None):
         """Disassemble every block reachable from @offset regarding
         specific disasmEngine conditions
         Return an AsmCFG instance containing disassembled blocks
@@ -1578,8 +1593,9 @@ class disasmEngine(object):
         @blocks: (optional) AsmCFG instance of already disassembled blocks to
                 merge with
         """
-        log_asmblock.info("dis bloc all")
-        job_done = set()
+        log_asmblock.info("dis block all")
+        if job_done is None:
+            job_done = set()
         if blocks is None:
             blocks = AsmCFG(self.loc_db)
         todo = [offset]

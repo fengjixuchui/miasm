@@ -2,25 +2,27 @@ import os
 
 from future.utils import viewitems
 
-from miasm.core.utils import force_bytes
+from miasm.core.utils import force_bytes, force_str
 from miasm.jitter.csts import PAGE_READ, PAGE_WRITE
 from miasm.core.utils import get_caller_name
 from miasm.core.utils import pck64, upck64
 
 BASE_SB_PATH = "file_sb"
+WIN_CODEPAGE = "cp1252"
 
-
-def get_str_ansi(jitter, ad_str, max_char=None):
+def get_win_str_a(jitter, ad_str, max_char=None):
     l = 0
     tmp = ad_str
     while ((max_char is None or l < max_char) and
            jitter.vm.get_mem(tmp, 1) != b"\x00"):
         tmp += 1
         l += 1
-    return jitter.vm.get_mem(ad_str, l)
+    data = jitter.vm.get_mem(ad_str, l)
+    ret = data.decode(WIN_CODEPAGE)
+    return ret
 
 
-def get_str_unic(jitter, ad_str, max_char=None):
+def get_win_str_w(jitter, ad_str, max_char=None):
     l = 0
     tmp = ad_str
     while ((max_char is None or l < max_char) and
@@ -31,18 +33,23 @@ def get_str_unic(jitter, ad_str, max_char=None):
     s = s.decode("utf-16le")
     return s
 
+def encode_win_str_a(value):
+    value = value.encode(WIN_CODEPAGE) + b"\x00"
+    return value
 
-def set_str_ansi(value):
-    value = force_bytes(value)
-    return value + b"\x00"
+def encode_win_str_w(value):
+    value = value.encode("utf-16le") + b'\x00' * 2
+    return value
 
 
-def set_str_unic(value):
-    try:
-        value = value.decode()
-    except AttributeError:
-        pass
-    return value.encode("utf-16le") + b'\x00' * 2
+def set_win_str_a(jitter, addr, value):
+    value = encode_win_str_a(value)
+    jitter.vm.set_mem(addr, value)
+
+
+def set_win_str_w(jitter, addr, value):
+    value = encode_win_str_w(value)
+    jitter.vm.set_mem(addr, value)
 
 
 class heap(object):
@@ -130,16 +137,10 @@ def unix_to_sbpath(path):
 def get_fmt_args(fmt, cur_arg, get_str, get_arg_n):
     idx = 0
     fmt = get_str(fmt)
-    if isinstance(fmt, bytes):
-        chars_format = b'%cdfsuxX'
-        char_percent = b'%'
-        char_string = b's'
-        output = b""
-    else:
-        chars_format = u'%cdfsuxX'
-        char_percent = u'%'
-        char_string = u's'
-        output = u""
+    chars_format = '%cdfsuxX'
+    char_percent = '%'
+    char_string = 's'
+    output = ""
 
     while True:
         if idx == len(fmt):

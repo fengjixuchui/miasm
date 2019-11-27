@@ -496,7 +496,7 @@ class instruction_x86(instruction):
             return True
         if self.name.startswith('SYS'):
             return True
-        return self.name in ['CALL', 'HLT', 'IRET', 'IRETD', 'IRETQ', 'ICEBP']
+        return self.name in ['CALL', 'HLT', 'IRET', 'IRETD', 'IRETQ', 'ICEBP', 'UD2']
 
     def splitflow(self):
         if self.name in conditional_branch:
@@ -3795,6 +3795,8 @@ addop("movmskps", [bs8(0x0f), bs8(0x50), no_xmm_pref] +
 addop("movmskpd", [bs8(0x0f), bs8(0x50), pref_66] +
       rmmod(reg_modrm, rm_arg_xmm_reg))
 
+addop("movnti", [bs8(0x0f), bs8(0xc3)] + rmmod(rmreg), [rm_arg, rmreg])
+
 addop("addss", [bs8(0x0f), bs8(0x58), pref_f3] + rmmod(xmm_reg, rm_arg_xmm_m32))
 addop("addsd", [bs8(0x0f), bs8(0x58), pref_f2] + rmmod(xmm_reg, rm_arg_xmm_m64))
 
@@ -3807,6 +3809,10 @@ addop("mulsd", [bs8(0x0f), bs8(0x59), pref_f2] + rmmod(xmm_reg, rm_arg_xmm_m64))
 addop("divss", [bs8(0x0f), bs8(0x5e), pref_f3] + rmmod(xmm_reg, rm_arg_xmm_m32))
 addop("divsd", [bs8(0x0f), bs8(0x5e), pref_f2] + rmmod(xmm_reg, rm_arg_xmm_m64))
 
+addop("roundss", [bs8(0x0f), bs8(0x3a), bs8(0x0a), pref_66] +
+      rmmod(xmm_reg, rm_arg_xmm_m32) + [u08])
+addop("roundsd", [bs8(0x0f), bs8(0x3a), bs8(0x0b), pref_66] +
+      rmmod(xmm_reg, rm_arg_xmm_m64) + [u08])
 
 addop("pminsw", [bs8(0x0f), bs8(0xea), no_xmm_pref] + rmmod(mm_reg, rm_arg_mm))
 addop("pminsw", [bs8(0x0f), bs8(0xea), pref_66] + rmmod(xmm_reg, rm_arg_xmm))

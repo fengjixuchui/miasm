@@ -639,16 +639,6 @@ class IRCFG(DiGraph):
             self.blocks[loc_key] = IRBlock(loc_key, assignblks)
         return modified
 
-    def get_rw(self, regs_ids=None):
-        """
-        Calls get_rw(irb) for each bloc
-        @regs_ids : ids of registers used in IR
-        """
-        if regs_ids is None:
-            regs_ids = []
-        for irblock in viewvalues(self.blocks):
-            irblock.get_rw(regs_ids)
-
     def _extract_dst(self, todo, done):
         """
         Naive extraction of @todo destinations
@@ -703,7 +693,7 @@ class DiGraphIR(IRCFG):
 
     def __init__(self, *args, **kwargs):
         warnings.warn('DEPRECATION WARNING: use "IRCFG" instead of "DiGraphIR"')
-        raise NotImplementedError("Depreceated")
+        raise NotImplementedError("Deprecated")
 
 
 class IntermediateRepresentation(object):

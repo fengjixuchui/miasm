@@ -1210,7 +1210,9 @@ class LLVMFunction(object):
         if isinstance(expr, ExprMem):
 
             addr = self.add_ir(expr.ptr)
-            return self.llvm_context.memory_lookup(self, addr, expr.size)
+            ret = self.llvm_context.memory_lookup(self, addr, expr.size)
+            self.update_cache(expr, ret)
+            return ret
 
         if isinstance(expr, ExprCond):
             # Compute cond
@@ -1341,7 +1343,7 @@ class LLVMFunction(object):
         current_main_stream = self.main_stream
         self.main_stream = False
 
-        # Then Bloc
+        # Then Block
         builder.position_at_end(then_block)
         PC = self.llvm_context.PC
         if isinstance(offset, int_types):
@@ -1393,7 +1395,7 @@ class LLVMFunction(object):
         current_main_stream = self.main_stream
         self.main_stream = False
 
-        # Then Bloc
+        # Then Block
         builder.position_at_end(then_block)
         PC = self.llvm_context.PC
         if isinstance(offset, int_types):
