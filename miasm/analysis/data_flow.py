@@ -69,6 +69,8 @@ class ReachingDefinitions(dict):
         """
         predecessor_state = {}
         for pred_lbl in self.ircfg.predecessors(block.loc_key):
+            if pred_lbl not in self.ircfg.blocks:
+                continue
             pred = self.ircfg.blocks[pred_lbl]
             for lval, definitions in viewitems(self.get_definitions(pred_lbl, len(pred))):
                 predecessor_state.setdefault(lval, set()).update(definitions)
@@ -201,81 +203,191 @@ class DiGraphDefUse(DiGraph):
         yield self.DotCellDescription(text="", attr={})
 
 
-def dead_simp_useful_assignblks(irarch, defuse, reaching_defs):
-    """Mark useful statements using previous reach analysis and defuse
-
-    Source : Kennedy, K. (1979). A survey of data flow analysis techniques.
-    IBM Thomas J. Watson Research Division,  Algorithm MK
-
-    Return a set of triplets (block, assignblk number, lvalue) of
-    useful definitions
-    PRE: compute_reach(self)
-
+class DeadRemoval(object):
     """
-    ircfg = reaching_defs.ircfg
-    useful = set()
+    Do dead removal
+    """
 
-    for block_lbl, block in viewitems(ircfg.blocks):
-        successors = ircfg.successors(block_lbl)
-        for successor in successors:
-            if successor not in ircfg.blocks:
-                keep_all_definitions = True
-                break
-        else:
-            keep_all_definitions = False
+    def __init__(self, ir_arch, expr_to_original_expr=None):
+        self.ir_arch = ir_arch
+        if expr_to_original_expr is None:
+            expr_to_original_expr = {}
+        self.expr_to_original_expr = expr_to_original_expr
 
-        # Block has a nonexistent successor or is a leaf
-        if keep_all_definitions or (len(successors) == 0):
-            valid_definitions = reaching_defs.get_definitions(block_lbl,
-                                                              len(block))
-            for lval, definitions in viewitems(valid_definitions):
-                if lval in irarch.get_out_regs(block) or keep_all_definitions:
-                    for definition in definitions:
-                        useful.add(AssignblkNode(definition[0], definition[1], lval))
 
-        # Force keeping of specific cases
+    def add_expr_to_original_expr(self, expr_to_original_expr):
+        self.expr_to_original_expr.update(expr_to_original_expr)
+
+    def is_unkillable_destination(self, lval, rval):
+        if (
+                lval.is_mem() or
+                self.ir_arch.IRDst == lval or
+                lval.is_id("exception_flags") or
+                rval.is_function_call()
+        ):
+            return True
+        return False
+
+    def get_block_useful_destinations(self, block):
+        """
+        Force keeping of specific cases
+        block: IRBlock instance
+        """
+        useful = set()
         for index, assignblk in enumerate(block):
             for lval, rval in viewitems(assignblk):
-                if (lval.is_mem() or
-                    irarch.IRDst == lval or
-                    lval.is_id("exception_flags") or
-                    rval.is_function_call()):
-                    useful.add(AssignblkNode(block_lbl, index, lval))
+                if self.is_unkillable_destination(lval, rval):
+                    useful.add(AssignblkNode(block.loc_key, index, lval))
+        return useful
 
-    # Useful nodes dependencies
-    for node in useful:
-        for parent in defuse.reachable_parents(node):
-            yield parent
+    def is_tracked_var(self, lval, variable):
+        new_lval = self.expr_to_original_expr.get(lval, lval)
+        return new_lval == variable
+
+    def find_definitions_from_worklist(self, worklist, ircfg):
+        """
+        Find variables definition in @worklist by browsing the @ircfg
+        """
+        locs_done = set()
+
+        defs = set()
+
+        while worklist:
+            found = False
+            elt = worklist.pop()
+            if elt in locs_done:
+                continue
+            locs_done.add(elt)
+            variable, loc_key = elt
+            block = ircfg.get_block(loc_key)
+
+            if block is None:
+                # Consider no sources in incomplete graph
+                continue
+
+            for index, assignblk in reversed(list(enumerate(block))):
+                for dst, src in viewitems(assignblk):
+                    if self.is_tracked_var(dst, variable):
+                        defs.add(AssignblkNode(loc_key, index, dst))
+                        found = True
+                        break
+                if found:
+                    break
+
+            if not found:
+                for predecessor in ircfg.predecessors(loc_key):
+                    worklist.add((variable, predecessor))
+
+        return defs
+
+    def find_out_regs_definitions_from_block(self, block, ircfg):
+        """
+        Find definitions of out regs starting from @block
+        """
+        worklist = set()
+        for reg in self.ir_arch.get_out_regs(block):
+            worklist.add((reg, block.loc_key))
+        ret = self.find_definitions_from_worklist(worklist, ircfg)
+        return ret
 
 
-def dead_simp(irarch, ircfg):
-    """
-    Remove useless assignments.
+    def add_def_for_incomplete_leaf(self, block, ircfg, reaching_defs):
+        """
+        Add valid definitions at end of @block plus out regs
+        """
+        valid_definitions = reaching_defs.get_definitions(
+            block.loc_key,
+            len(block)
+        )
+        worklist = set()
+        for lval, definitions in viewitems(valid_definitions):
+            for definition in definitions:
+                new_lval = self.expr_to_original_expr.get(lval, lval)
+                worklist.add((new_lval, block.loc_key))
+        ret = self.find_definitions_from_worklist(worklist, ircfg)
+        useful = ret
+        useful.update(self.find_out_regs_definitions_from_block(block, ircfg))
+        return useful
 
-    This function is used to analyse relation of a * complete function *
-    This means the blocks under study represent a solid full function graph.
+    def get_useful_assignments(self, ircfg, defuse, reaching_defs):
+        """
+        Mark useful statements using previous reach analysis and defuse
 
-    Source : Kennedy, K. (1979). A survey of data flow analysis techniques.
-    IBM Thomas J. Watson Research Division, page 43
+        Return a set of triplets (block, assignblk number, lvalue) of
+        useful definitions
+        PRE: compute_reach(self)
 
-    @ircfg: IntermediateRepresentation instance
-    """
+        """
 
-    modified = False
-    reaching_defs = ReachingDefinitions(ircfg)
-    defuse = DiGraphDefUse(reaching_defs, deref_mem=True)
-    useful = set(dead_simp_useful_assignblks(irarch, defuse, reaching_defs))
-    for block in list(viewvalues(ircfg.blocks)):
-        irs = []
-        for idx, assignblk in enumerate(block):
-            new_assignblk = dict(assignblk)
-            for lval in assignblk:
-                if AssignblkNode(block.loc_key, idx, lval) not in useful:
-                    del new_assignblk[lval]
-                    modified = True
-            irs.append(AssignBlock(new_assignblk, assignblk.instr))
-        ircfg.blocks[block.loc_key] = IRBlock(block.loc_key, irs)
-    return modified
+        useful = set()
+
+        for block_lbl, block in viewitems(ircfg.blocks):
+            block = ircfg.get_block(block_lbl)
+            if block is None:
+                # skip unknown blocks: won't generate dependencies
+                continue
+
+            block_useful = self.get_block_useful_destinations(block)
+            useful.update(block_useful)
+
+
+            successors = ircfg.successors(block_lbl)
+            for successor in successors:
+                if successor not in ircfg.blocks:
+                    keep_all_definitions = True
+                    break
+            else:
+                keep_all_definitions = False
+
+            if keep_all_definitions:
+                useful.update(self.add_def_for_incomplete_leaf(block, ircfg, reaching_defs))
+                continue
+
+            if len(successors) == 0:
+                useful.update(self.find_out_regs_definitions_from_block(block, ircfg))
+            else:
+                continue
+
+
+
+        # Useful nodes dependencies
+        for node in useful:
+            for parent in defuse.reachable_parents(node):
+                yield parent
+
+    def do_dead_removal(self, ircfg):
+        """
+        Remove useless assignments.
+
+        This function is used to analyse relation of a * complete function *
+        This means the blocks under study represent a solid full function graph.
+
+        Source : Kennedy, K. (1979). A survey of data flow analysis techniques.
+        IBM Thomas J. Watson Research Division, page 43
+
+        @ircfg: IntermediateRepresentation instance
+        """
+
+        modified = False
+        reaching_defs = ReachingDefinitions(ircfg)
+        defuse = DiGraphDefUse(reaching_defs, deref_mem=True)
+        useful = self.get_useful_assignments(ircfg, defuse, reaching_defs)
+        useful = set(useful)
+        for block in list(viewvalues(ircfg.blocks)):
+            irs = []
+            for idx, assignblk in enumerate(block):
+                new_assignblk = dict(assignblk)
+                for lval in assignblk:
+                    if AssignblkNode(block.loc_key, idx, lval) not in useful:
+                        del new_assignblk[lval]
+                        modified = True
+                irs.append(AssignBlock(new_assignblk, assignblk.instr))
+            ircfg.blocks[block.loc_key] = IRBlock(block.loc_key, irs)
+        return modified
+
+    def __call__(self, ircfg):
+        ret = self.do_dead_removal(ircfg)
+        return ret
 
 
 def _test_merge_next_block(ircfg, loc_key):
@@ -680,6 +792,8 @@ class PropagateThroughExprId(object):
         else:
             # Check everyone but node_a.label and node_b.label
             for loc in nodes_to_do - set([node_a.label, node_b.label]):
+                if loc not in ssa.graph.blocks:
+                    continue
                 block = ssa.graph.blocks[loc]
                 if self.has_propagation_barrier(block.assignblks):
                     return True
@@ -725,7 +839,10 @@ class PropagateThroughExprId(object):
         ircfg = ssa.graph
         def_dct = {}
         for node in ircfg.nodes():
-            for index, assignblk in enumerate(ircfg.blocks[node]):
+            block = ircfg.blocks.get(node, None)
+            if block is None:
+                continue
+            for index, assignblk in enumerate(block):
                 for dst, src in viewitems(assignblk):
                     if not dst.is_id():
                         continue
@@ -891,7 +1008,9 @@ class PropagateThroughExprMem(object):
 
         while todo:
             loc_key, index, mem_dst, mem_src = todo.pop()
-            block = ircfg.blocks[loc_key]
+            block = ircfg.blocks.get(loc_key, None)
+            if block is None:
+                continue
             assignblks = list(block)
             block_modified = False
             for i in range(index, len(block)):
@@ -1254,7 +1373,9 @@ class DiGraphLiveness(DiGraph):
         self._blocks = {}
         # Add irblocks gen/kill
         for node in ircfg.nodes():
-            irblock = ircfg.blocks[node]
+            irblock = ircfg.blocks.get(node, None)
+            if irblock is None:
+                continue
             irblockinfos = IRBlockLivenessInfos(irblock)
             self.add_node(irblockinfos.loc_key)
             self.blocks[irblockinfos.loc_key] = irblockinfos
@@ -1357,7 +1478,9 @@ class DiGraphLiveness(DiGraph):
         todo = set(self.leaves())
         while todo:
             node = todo.pop()
-            cur_block = self.blocks[node]
+            cur_block = self.blocks.get(node, None)
+            if cur_block is None:
+                continue
             modified = self.back_propagate_compute(cur_block)
             if not modified:
                 continue
@@ -1376,7 +1499,9 @@ class DiGraphLivenessIRA(DiGraphLiveness):
         """Add ircfg out regs"""
 
         for node in self.leaves():
-            irblock = self.ircfg.blocks[node]
+            irblock = self.ircfg.blocks.get(node, None)
+            if irblock is None:
+                continue
             var_out = ir_arch_a.get_out_regs(irblock)
             irblock_liveness = self.blocks[node]
             irblock_liveness.infos[-1].var_out = var_out
@@ -1454,18 +1579,24 @@ def update_phi_with_deleted_edges(ircfg, edges_to_del):
     @edges_to_del: edges to delete
     """
 
+
+    phi_locs_to_srcs = {}
+    for loc_src, loc_dst in edges_to_del:
+        phi_locs_to_srcs.setdefault(loc_dst, set()).add(loc_src)
+
     modified = False
     blocks = dict(ircfg.blocks)
-    for loc_src, loc_dst in edges_to_del:
+    for loc_dst, loc_srcs in viewitems(phi_locs_to_srcs):
         block = ircfg.blocks[loc_dst]
-        assert block.assignblks
+        if not irblock_has_phi(block):
+            continue
         assignblks = list(block)
         assignblk = assignblks[0]
         out = {}
         for dst, phi_sources in viewitems(assignblk):
             if not phi_sources.is_op('Phi'):
-                out = assignblk
-                break
+                out[dst] = phi_sources
+                continue
             var_to_parents = get_phi_sources_parent_block(
                 ircfg,
                 loc_dst,
@@ -1474,7 +1605,8 @@ def update_phi_with_deleted_edges(ircfg, edges_to_del):
             to_keep = set(phi_sources.args)
             for src in phi_sources.args:
                 parents = var_to_parents[src]
-                if loc_src in parents:
+                remaining = parents.difference(loc_srcs)
+                if not remaining:
                     to_keep.discard(src)
                     modified = True
             assert to_keep
@@ -1504,7 +1636,9 @@ def del_unused_edges(ircfg, heads):
     edges_to_del_1 = set()
     for node in ircfg.nodes():
         successors = set(ircfg.successors(node))
-        block = ircfg.blocks[node]
+        block = ircfg.blocks.get(node, None)
+        if block is None:
+            continue
         dst = block.dst
         possible_dsts = set(solution.value for solution in possible_values(dst))
         if not all(dst.is_loc() for dst in possible_dsts):
@@ -1528,6 +1662,8 @@ def del_unused_edges(ircfg, heads):
     for node in nodes_to_del:
         block = ircfg.blocks[node]
         ircfg.del_node(node)
+        del ircfg.blocks[node]
+
         for assignblock in block:
             for dst in assignblock:
                 deleted_vars.add(dst)
@@ -1551,12 +1687,18 @@ class DiGraphLivenessSSA(DiGraphLivenessIRA):
                 continue
             out = {}
             for sources in viewvalues(irblock[0]):
+                if not sources.is_op('Phi'):
+                    # Some phi sources may have already been resolved to an
+                    # expression
+                    continue
                 var_to_parents = get_phi_sources_parent_block(self, irblock.loc_key, sources.args)
                 for var, var_parents in viewitems(var_to_parents):
                     out.setdefault(var, set()).update(var_parents)
             self.loc_key_to_phi_parents[irblock.loc_key] = out
 
     def back_propagate_to_parent(self, todo, node, parent):
+        if parent not in self.blocks:
+            return
         parent_block = self.blocks[parent]
         cur_block = self.blocks[node]
         irblock = self.ircfg.blocks[node]
