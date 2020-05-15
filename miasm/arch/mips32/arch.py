@@ -47,8 +47,8 @@ class additional_info(object):
         self.except_on_instr = False
 
 br_0 = ['B', 'J', 'JR', 'BAL', 'JAL', 'JALR']
-br_1 = ['BGEZ', 'BLTZ', 'BGTZ', 'BLEZ', 'BC1T', 'BC1F']
-br_2 = ['BEQ', 'BEQL', 'BNE']
+br_1 = ['BGEZ', 'BLTZ', 'BGTZ', 'BGTZL', 'BLEZ', 'BLEZL', 'BC1T', 'BC1TL', 'BC1F', 'BC1FL']
+br_2 = ['BEQ', 'BEQL', 'BNE', 'BNEL']
 
 
 class instruction_mips32(cpu.instruction):
@@ -95,8 +95,9 @@ class instruction_mips32(cpu.instruction):
 
     def dstflow2label(self, loc_db):
         if self.name in ["J", 'JAL']:
-            expr = self.args[0].arg
-            addr = (self.offset & (0xFFFFFFFF ^ ((1<< 28)-1))) + expr
+            expr = self.args[0]
+            offset = int(expr)
+            addr = ((self.offset & (0xFFFFFFFF ^ ((1<< 28)-1))) + offset) & int(expr.mask)
             loc_key = loc_db.get_or_create_offset_location(addr)
             self.args[0] = ExprLoc(loc_key, expr.size)
             return
@@ -106,7 +107,7 @@ class instruction_mips32(cpu.instruction):
 
         if not isinstance(expr, ExprInt):
             return
-        addr = expr.arg + self.offset
+        addr = (int(expr) + self.offset) & int(expr.mask)
         loc_key = loc_db.get_or_create_offset_location(addr)
         self.args[ndx] = ExprLoc(loc_key, expr.size)
 
@@ -157,7 +158,7 @@ class instruction_mips32(cpu.instruction):
             raise ValueError('symbol not resolved %s' % self.l)
         if not isinstance(e, ExprInt):
             return
-        off = e.arg - self.offset
+        off = (int(e) - self.offset) & int(e.mask)
         if int(off % 4):
             raise ValueError('strange offset! %r' % off)
         self.args[ndx] = ExprInt(off, 32)
@@ -312,7 +313,7 @@ class mips32_s16imm_noarg(mips32_imm):
     def encode(self):
         if not isinstance(self.expr, ExprInt):
             return False
-        v = self.expr.arg.arg
+        v = int(self.expr)
         if v & 0x80000000:
             nv = v & ((1 << 16) - 1)
             assert( v == cpu.sign_ext(nv, 16, 32))
@@ -333,7 +334,7 @@ class mips32_soff_noarg(mips32_imm):
         if not isinstance(self.expr, ExprInt):
             return False
         # Remove pipeline offset
-        v = int(self.expr.arg - 4)
+        v = (int(self.expr) - 4) & 0xFFFFFFFF
         if v & 0x80000000:
             nv = v & ((1 << 16+2) - 1)
             assert( v == cpu.sign_ext(nv, 16+2, 32))
@@ -358,7 +359,7 @@ class mips32_instr_index(mips32_imm, mips32_arg):
     def encode(self):
         if not isinstance(self.expr, ExprInt):
             return False
-        v = self.expr.arg.arg
+        v = int(self.expr)
         if v & 3:
             return False
         v>>=2
@@ -377,7 +378,7 @@ class mips32_u16imm(mips32_imm, mips32_arg):
     def encode(self):
         if not isinstance(self.expr, ExprInt):
             return False
-        v = self.expr.arg.arg
+        v = int(self.expr)
         assert(v < (1<<16))
         self.value = v
         return True
@@ -424,7 +425,7 @@ class mips32_esize(mips32_imm, mips32_arg):
     def encode(self):
         if not isinstance(self.expr, ExprInt):
             return False
-        v = self.expr.arg.arg -1
+        v = int(self.expr) -1
         assert(v < (1<<16))
         self.value = v
         return True
@@ -437,7 +438,7 @@ class mips32_eposh(mips32_imm, mips32_arg):
     def encode(self):
         if not isinstance(self.expr, ExprInt):
             return False
-        v = int(self.expr.arg) + int(self.parent.epos.expr) -1
+        v = int(self.expr) + int(self.parent.epos.expr) -1
         self.value = v
         return True
 
@@ -668,13 +669,18 @@ mips32op("mfhi",    [cpu.bs('000000'), cpu.bs('0000000000'), rd,
 mips32op("b",       [cpu.bs('000100'), cpu.bs('00000'), cpu.bs('00000'), soff],
          alias = True)
 mips32op("bne",     [cpu.bs('000101'), rs, rt, soff])
+mips32op("bnel",    [cpu.bs('010101'), rs, rt, soff])
+
 mips32op("beq",     [cpu.bs('000100'), rs, rt, soff])
+mips32op("beql",    [cpu.bs('010100'), rs, rt, soff])
 
 mips32op("blez",    [cpu.bs('000110'), rs, cpu.bs('00000'), soff])
+mips32op("blezl",   [cpu.bs('010110'), rs, cpu.bs('00000'), soff])
 
 mips32op("bcc",     [cpu.bs('000001'), rs, bs_bcc, soff])
 
 mips32op("bgtz",    [cpu.bs('000111'), rs, cpu.bs('00000'), soff])
+mips32op("bgtzl",   [cpu.bs('010111'), rs, cpu.bs('00000'), soff])
 mips32op("bal",     [cpu.bs('000001'), cpu.bs('00000'), cpu.bs('10001'), soff],
          alias = True)
 
@@ -715,7 +721,11 @@ mips32op("c",       [cpu.bs('010001'), bs_fmt, ft, fs, fcc, cpu.bs('0'),
 
 mips32op("bc1t",    [cpu.bs('010001'), cpu.bs('01000'), fcc, cpu.bs('0'),
                      cpu.bs('1'), soff])
+mips32op("bc1tl",    [cpu.bs('010001'), cpu.bs('01000'), fcc, cpu.bs('1'),
+                     cpu.bs('1'), soff])
 mips32op("bc1f",    [cpu.bs('010001'), cpu.bs('01000'), fcc, cpu.bs('0'),
+                     cpu.bs('0'), soff])
+mips32op("bc1fl",    [cpu.bs('010001'), cpu.bs('01000'), fcc, cpu.bs('1'),
                      cpu.bs('0'), soff])
 
 mips32op("swc1",    [cpu.bs('111001'), base, ft, s16imm_noarg], [ft, base])

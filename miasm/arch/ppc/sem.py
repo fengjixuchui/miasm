@@ -25,6 +25,20 @@ sr_dict = {
     12: SR12, 13: SR13, 14: SR14, 15: SR15
 }
 
+float_dict = {
+    0: FPR0, 1: FPR1, 2: FPR2, 3: FPR3, 4: FPR4, 5: FPR5, 6: FPR6, 7: FPR7, 8: FPR8, 
+    9: FPR9, 10: FPR10, 11: FPR11, 12: FPR12, 13: FPR13, 14: FPR14, 15: FPR15, 16: FPR16, 
+    17: FPR17, 18: FPR18, 19: FPR19, 20: FPR20, 21: FPR21, 22: FPR22, 23: FPR23, 24: FPR24, 
+    25: FPR25, 26: FPR26, 27: FPR27, 28: FPR28, 29: FPR29, 30: FPR30, 31: FPR31
+}
+
+vex_dict = {
+    0: VR0, 1: VR1, 2: VR2, 3: VR3, 4: VR4, 5: VR5, 6: VR6, 7: VR7, 8: VR8, 
+    9: VR9, 10: VR10, 11: VR11, 12: VR12, 13: VR13, 14: VR14, 15: VR15, 16: VR16, 
+    17: VR17, 18: VR18, 19: VR19, 20: VR20, 21: VR21, 22: VR22, 23: VR23, 24: VR24, 
+    25: VR25, 26: VR26, 27: VR27, 28: VR28, 29: VR29, 30: VR30, 31: VR31,    
+}
+
 crf_dict = dict((ExprId("CR%d" % i, 4),
                  dict( (bit, ExprId("CR%d_%s" % (i, bit), 1))
                        for bit in ['LT', 'GT', 'EQ', 'SO' ] ))
@@ -34,6 +48,8 @@ ctx = {
     'crf_dict': crf_dict,
     'spr_dict': spr_dict,
     'sr_dict': sr_dict,
+    'float_dict': float_dict,
+    'vex_dict': vex_dict,
     'expr': expr,
 }
 
@@ -125,7 +141,7 @@ def mn_do_cntlzw(ir, instr, ra, rs):
     return ret, []
 
 def crbit_to_reg(bit):
-    bit = bit.arg.arg
+    bit = int(bit)
     crid = bit // 4
     bitname = [ 'LT', 'GT', 'EQ', 'SO' ][bit % 4]
     return all_regs_ids_byname["CR%d_%s" % (crid, bitname)]
@@ -232,8 +248,8 @@ def mn_do_exts(ir, instr, ra, rs):
 
 def byte_swap(expr):
     nbytes = expr.size // 8
-    bytes = [ expr[i*8:i*8+8] for i in range(nbytes - 1, -1, -1) ]
-    return ExprCompose(bytes)
+    lbytes = [ expr[i*8:i*8+8] for i in range(nbytes - 1, -1, -1) ]
+    return ExprCompose(*lbytes)
 
 def mn_do_load(ir, instr, arg1, arg2, arg3=None):
     assert instr.name[0] == 'L'
@@ -244,6 +260,12 @@ def mn_do_load(ir, instr, arg1, arg2, arg3=None):
         return mn_do_lmw(ir, instr, arg1, arg2)
     elif instr.name[1] == 'S':
         raise RuntimeError("LSWI, and LSWX need implementing")
+    elif instr.name[1] == 'F':
+        print("Warning, instruction %s implemented as NOP" % instr)
+        return  [], []
+    elif instr.name[1] == 'V':
+        print("Warning, instruction %s implemented as NOP" % instr)
+        return [], []    
 
     size = {'B': 8, 'H': 16, 'W': 32}[instr.name[1]]
 
@@ -298,7 +320,7 @@ def mn_do_load(ir, instr, arg1, arg2, arg3=None):
 
 def mn_do_lmw(ir, instr, rd, src):
     ret = []
-    address = src.arg
+    address = src.ptr
     ri = int(rd.name[1:],10)
     i = 0
     while ri <= 31:
@@ -348,7 +370,7 @@ def mn_mfmsr(rd):
     rd = MSR
 
 def mn_mfspr(ir, instr, arg1, arg2):
-    sprid = arg2.arg.arg
+    sprid = int(arg2)
     gprid = int(arg1.name[1:])
     if sprid in spr_dict:
         return [ ExprAssign(arg1, spr_dict[sprid]) ], []
@@ -365,7 +387,7 @@ def mn_mtcrf(ir, instr, crm, rs):
     ret = []
 
     for i in range(8):
-        if crm.arg.arg & (1 << (7 - i)):
+        if int(crm) & (1 << (7 - i)):
             j = (28 - 4 * i) + 3
             for b in ['LT', 'GT', 'EQ', 'SO']:
                 ret.append(ExprAssign(all_regs_ids_byname["CR%d_%s" % (i, b)],
@@ -379,7 +401,7 @@ def mn_mtmsr(ir, instr, rs):
     return [ ExprAssign(MSR, rs) ], []
 
 def mn_mtspr(ir, instr, arg1, arg2):
-    sprid = arg1.arg.arg
+    sprid = int(arg1)
     gprid = int(arg2.name[1:])
     if sprid in spr_dict:
         return [ ExprAssign(spr_dict[sprid], arg2) ], []
@@ -562,7 +584,7 @@ def mn_do_srawi(ir, instr, ra, rs, imm):
     if instr.name[-1] == '.':
         ret += mn_compute_flags(rvalue)
 
-    mask = ExprInt(0xFFFFFFFF >> (32 - imm.arg.arg), 32)
+    mask = ExprInt(0xFFFFFFFF >> (32 - int(imm)), 32)
 
     ret.append(ExprAssign(XER_CA, rs.msb() &
                        ExprCond(rs & mask, ExprInt(1, 1), ExprInt(0, 1))))
@@ -580,7 +602,7 @@ def mn_do_srw(ir, instr, ra, rs, rb):
 
 def mn_do_stmw(ir, instr, rs, dest):
     ret = []
-    address = dest.arg
+    address = dest.ptr
     ri = int(rs.name[1:],10)
     i = 0
     while ri <= 31:
@@ -599,6 +621,9 @@ def mn_do_store(ir, instr, arg1, arg2, arg3=None):
 
     if instr.name[2] == 'S':
         raise RuntimeError("STSWI, and STSWX need implementing")
+    elif instr.name[2] == 'F':
+        print("Warning, instruction %s implemented as NOP" % instr)
+        return  [], []
 
     size = {'B': 8, 'H': 16, 'W': 32}[instr.name[2]]
 
@@ -650,8 +675,8 @@ def mn_do_store(ir, instr, arg1, arg2, arg3=None):
         ret.append(ExprAssign(ir.IRDst, loc_next))
         dont = flags + [ ExprAssign(CR0_EQ, ExprInt(0,1)),
                          ExprAssign(ir.IRDst, loc_next) ]
-        additional_ir = [ IRBlock(loc_do, [ AssignBlock(ret) ]),
-                          IRBlock(loc_dont, [ AssignBlock(dont) ]) ]
+        additional_ir = [ IRBlock(loc_do.loc_key, [ AssignBlock(ret) ]),
+                          IRBlock(loc_dont.loc_key, [ AssignBlock(dont) ]) ]
         ret = [ ExprAssign(reserve, ExprInt(0, 1)),
                 ExprAssign(ir.IRDst, ExprCond(reserve, loc_do, loc_dont)) ]
 
@@ -834,16 +859,21 @@ sem_dir = {
     'MCRF': mn_do_mcrf,
     'MCRXR': mn_do_mcrxr,
     'MFCR': mn_do_mfcr,
+    'MFFS': mn_do_nop_warn,
+    'MFFS.': mn_do_nop_warn,
     'MFMSR': mn_mfmsr,
     'MFSPR': mn_mfspr,
     'MFSR': mn_mfsr,
     'MFSRIN': mn_do_nop_warn,
-    'MFTB': mn_mfmsr,
+    'MTFSF': mn_do_nop_warn,
+    'MTFSF.': mn_do_nop_warn,
+    'MFTB': mn_mfspr,
     'MTCRF': mn_mtcrf,
     'MTMSR': mn_mtmsr,
     'MTSPR': mn_mtspr,
     'MTSR': mn_mtsr,
     'MTSRIN': mn_do_nop_warn,
+    'MTVSCR': mn_do_nop_warn,
     'NAND': mn_do_nand,
     'NAND.': mn_do_nand,
     'NOR': mn_do_nor,
@@ -879,7 +909,7 @@ class ir_ppc32b(IntermediateRepresentation):
     def get_ir(self, instr):
         args = instr.args[:]
         if instr.name[0:5] in [ 'ADDIS', 'ORIS', 'XORIS', 'ANDIS' ]:
-            args[2] = ExprInt(args[2].arg << 16, 32)
+            args[2] = ExprInt(int(args[2]) << 16, 32)
         if instr.name[0:3] == 'ADD':
             if instr.name[0:4] == 'ADDZ':
                 last_arg = ExprInt(0, 32)
@@ -920,17 +950,17 @@ class ir_ppc32b(IntermediateRepresentation):
             instr_ir, extra_ir = mn_do_or(self, instr, *args)
         elif instr.name[0:2] == 'RL':
             instr_ir, extra_ir = mn_do_rotate(self, instr, args[0], args[1],
-                                              args[2], args[3].arg.arg,
-                                              args[4].arg.arg)
+                                              args[2], int(args[3]),
+                                              int(args[4]))
         elif instr.name == 'STMW':
             instr_ir, extra_ir = mn_do_stmw(self, instr, *args)
         elif instr.name[0:2] == 'ST':
             instr_ir, extra_ir = mn_do_store(self, instr, *args)
         elif instr.name[0:4] == 'SUBF':
             if instr.name[0:5] == 'SUBFZ':
-                last_arg = ExprInt(0)
+                last_arg = ExprInt(0, 32)
             elif instr.name[0:5] == 'SUBFM':
-                last_arg = ExprInt(0xFFFFFFFF)
+                last_arg = ExprInt(0xFFFFFFFF, 32)
             else:
                 last_arg = args[2]
             instr_ir, extra_ir = mn_do_sub(self, instr, args[0], args[1],

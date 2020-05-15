@@ -551,6 +551,46 @@ int vm_read_mem(vm_mngr_t* vm_mngr, uint64_t addr, char** buffer_ptr, size_t siz
        return 0;
 }
 
+
+/*
+   Try to read @size bytes from vm mmemory
+   Return the number of bytes consecutively read
+*/
+uint64_t vm_read_mem_ret_buf(vm_mngr_t* vm_mngr, uint64_t addr, size_t size, char *buffer)
+{
+	size_t len;
+	uint64_t addr_diff;
+	uint64_t size_out;
+	size_t addr_diff_st;
+
+	struct memory_page_node * mpn;
+
+	size_out = 0;
+	/* read is multiple page wide */
+	while (size){
+		mpn = get_memory_page_from_address(vm_mngr, addr, 0);
+		if (!mpn){
+			return size_out;
+		}
+
+		addr_diff = addr - mpn->ad;
+		if (addr_diff > SIZE_MAX) {
+			fprintf(stderr, "Size too big\n");
+			exit(EXIT_FAILURE);
+		}
+		addr_diff_st = (size_t) addr_diff;
+		len = MIN(size, mpn->size - addr_diff_st);
+		memcpy(buffer, (char*)mpn->ad_hp + (addr_diff_st), len);
+		buffer += len;
+		size_out += len;
+		addr += len;
+		size -= len;
+	}
+
+	return size_out;
+}
+
+
 int vm_write_mem(vm_mngr_t* vm_mngr, uint64_t addr, char *buffer, size_t size)
 {
        size_t len;

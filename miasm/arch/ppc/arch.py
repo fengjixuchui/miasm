@@ -129,9 +129,9 @@ class instruction_ppc(instruction):
             if not isinstance(e, ExprInt):
                 return
             if name[-1] != 'A':
-                ad = e.arg + self.offset
+                ad = (int(e) + self.offset) & 0xFFFFFFFF
             else:
-                ad = e.arg
+                ad = int(e)
             loc_key = loc_db.get_or_create_offset_location(ad)
             s = ExprLoc(loc_key, e.size)
             self.args[address_index] = s
@@ -175,11 +175,11 @@ class instruction_ppc(instruction):
         if self.name[-1] != 'A':
             if self.offset is None:
                 raise ValueError('symbol not resolved %s' % self.l)
-            off = e.arg - (self.offset + self.l)
+            off = (int(e) + 0x100000000 - (self.offset + self.l)) & 0xFFFFFFFF
             if int(off % 4):
                 raise ValueError('Offset %r must be a multiple of four' % off)
         else:
-            off = e.arg
+            off = int(e)
         self.args[0] = ExprInt(off, 32)
 
     def get_args_expr(self):
@@ -343,7 +343,7 @@ class ppc_s14imm_branch(ppc_imm):
     def encode(self):
         if not isinstance(self.expr, ExprInt):
             return False
-        v = self.expr.arg.arg
+        v = int(self.expr)
         if v & 0x3:
             return False
         v = v >> 2
@@ -362,7 +362,7 @@ class ppc_s24imm_branch(ppc_imm):
     def encode(self):
         if not isinstance(self.expr, ExprInt):
             return False
-        v = self.expr.arg.arg
+        v = int(self.expr)
         if v & 0x3:
             return False
         v = v >> 2
@@ -381,7 +381,7 @@ class ppc_s16imm(ppc_imm):
     def encode(self):
         if not isinstance(self.expr, ExprInt):
             return False
-        v = self.expr.arg.arg
+        v = int(self.expr)
         if sign_ext(v & self.lmask, 16, 32) != v:
             return False
         self.value = v & self.lmask
@@ -398,7 +398,7 @@ class ppc_u16imm(ppc_imm):
     def encode(self):
         if not isinstance(self.expr, ExprInt):
             return False
-        v = self.expr.arg.arg
+        v = int(self.expr)
         if v & self.lmask != v:
             return False
         self.value = v & self.lmask
@@ -416,7 +416,7 @@ class ppc_spr(ppc_imm):
     def encode(self, e):
         if not isinstance(e, ExprInt):
             return False
-        self.value = ppc_swap_10(e.arg)
+        self.value = ppc_swap_10(int(e))
         return True
 
 class ppc_tbr(ppc_imm):
@@ -428,7 +428,7 @@ class ppc_tbr(ppc_imm):
     def encode(self, e):
         if not isinstance(e, ExprInt):
             return False
-        self.value = ppc_swap_10(e.arg)
+        self.value = ppc_swap_10(int(e))
         return True
 
 class ppc_u08imm(ppc_u16imm):
@@ -443,6 +443,13 @@ class ppc_u04imm(ppc_u16imm):
 class ppc_u02imm_noarg(imm_noarg):
     pass
 
+class ppc_float(ppc_reg):
+    reg_info = floatregs
+    parser = reg_info.parser
+
+class ppc_vex(ppc_reg):
+    reg_info = vexregs
+    parser = reg_info.parser
 
 def ppc_bo_bi_to_mnemo(bo, bi, prefer_taken=True, default_taken=True):
     bo2mnemo = { 0: 'DNZF', 2: 'DZF', 4: 'F', 8: 'DNZT',
@@ -520,7 +527,7 @@ class ppc_deref32(ppc_arg):
         if len(addr.args) != 2:
             return False
         reg, disp = addr.args[0], addr.args[1]
-        v = int(disp.arg)
+        v = int(disp)
         if sign_ext(v & 0xFFFF, 16, 32) != v:
             return False
         v &= 0xFFFF
@@ -565,6 +572,16 @@ ra_or_0_noarg = bs(l=5, cls=(ppc_gpreg_or_0_noarg,), fname="ra")
 dregimm = bs(l=16, cls=(ppc_deref32,))
 
 rc_mod = bs_mod_name(l=1, mn_mod=['', '.'], fname='rc')
+
+frd = bs(l=5, cls=(ppc_float,))
+frb = bs(l=5, cls=(ppc_float,))
+frs = bs(l=5, cls=(ppc_float,))
+fm = bs(l=8, cls=(ppc_u08imm,))
+
+va = bs(l=5, cls=(ppc_vex,))
+vb = bs(l=5, cls=(ppc_vex,))
+vd = bs(l=5, cls=(ppc_vex,))
+rb_noarg = bs(l=5, cls=(ppc_gpreg_noarg,), fname="rb")
 
 arith1_name = {"MULLI": 0b000111, "SUBFIC": 0b001000, "ADDIC": 0b001100,
                "ADDIC.": 0b001101 }
@@ -635,6 +652,17 @@ dcb_name = {"DCBST": 0b00001, "DCBF": 0b00010,
             "DCBTST": 0b00111, "DCBT": 0b01000,
             "DCBI": 0b01110, "DCBA": 0b10111,
             "ICBI": 0b11110, "DCBZ": 0b11111 }
+
+
+load1_name_float = {"LFS": 0b110000, "LFD": 0b110010 }
+load1_name_float_u = {"LFSU": 0b110001, "LFDU": 0b110011 }
+store1_name_float = {"STFS": 0b110100, "STFD": 0b110110 }
+store1_name_float_u = {"STFSU": 0b110101, "STFDU": 0b110111 }
+
+load1_name_vex = {"LVEBX": 0b0000000111, "LVEHX": 0b0000100111,
+                  "LVEWX": 0b0001000111, "LVSL": 0b0000000110,
+                  "LVSR": 0b0000100110, "LVX": 0b0001100111,
+                  "LVXL": 0b0101100111 }
 
 class bs_mod_name_prio4(bs_mod_name):
     prio = 4
@@ -762,3 +790,15 @@ ppcop("SRAWI", [bs('011111'), rs, ra, sh, bs('1100111000'), rc_mod],
       [ra, rs, sh])
 
 ppcop("EIEIO", [bs('011111'), bs('000000000000000'), bs('11010101100')])
+
+ppcop("load1f", [bs_name(l=6, name=load1_name_float), frd, ra_noarg, dregimm])
+ppcop("load1fu", [bs_name(l=6, name=load1_name_float_u), frd, ra_noarg, dregimm])
+ppcop("store1f", [bs_name(l=6, name=store1_name_float), frd, ra_noarg, dregimm])
+ppcop("store1fu", [bs_name(l=6, name=store1_name_float_u), frd, ra_noarg, dregimm])
+ppcop("MTFSF", [bs('111111'), bs('0'), fm, bs('0'), frb, bs('10110001110')])
+ppcop("MTFSF.", [bs('111111'), bs('0'), fm, bs('0'), frb, bs('10110001111')])
+ppcop("MFFS", [bs('111111'), frd, bs('00000000001001000111'), bs('0')])
+ppcop("MFFS.", [bs('111111'), frd, bs('00000000001001000111'), bs('1')])
+
+ppcop("load1vex", [bs('011111'), vd, ra, rb, bs_name(l=10, name=load1_name_vex), bs('0')])
+ppcop("mtvscr", [bs('0001000000000000'), vb, bs('11001000100')])

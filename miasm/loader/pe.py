@@ -267,7 +267,7 @@ class DescName(CStruct):
         return name, off + len(name) + 1
 
     def sets(self, value):
-        return bytes(value) + b"\x00"
+        return force_bytes(value) + b"\x00"
 
 
 class ImportByName(CStruct):
@@ -434,7 +434,7 @@ class DirImport(CStruct):
             #    entry.firstthunk = rva
             # rva+=(len(entry.firstthunks)+1)*self.parent_head._wsize//8 # Rva size
             if entry.originalfirstthunk and entry.firstthunk:
-                if isinstance(entry.originalfirstthunk, struct_array):
+                if isinstance(entry.originalfirstthunks, struct_array):
                     tmp_thunk = entry.originalfirstthunks
                 elif isinstance(entry.firstthunks, struct_array):
                     tmp_thunk = entry.firstthunks
@@ -457,6 +457,11 @@ class DirImport(CStruct):
                     rva += len(imp)
 
     def build_content(self, raw):
+        if self.parent_head._wsize == 32:
+            mask_ptr = 0x80000000
+        elif self.parent_head._wsize == 64:
+            mask_ptr = 0x8000000000000000
+
         dirimp = self.parent_head.NThdr.optentries[DIRECTORY_ENTRY_IMPORT]
         of1 = dirimp.rva
         if not of1:  # No Import
@@ -918,7 +923,7 @@ class DirDelay(CStruct):
         return out, off
 
     def sete(self, entries):
-        return "".join(bytes(entry) for entry in entries) + b"\x00" * (4 * 8)  # DelayDesc_e
+        return b"".join(bytes(entry) for entry in entries) + b"\x00" * (4 * 8)  # DelayDesc_e
 
     def __len__(self):
         rva_size = self.parent_head._wsize // 8
@@ -1306,19 +1311,6 @@ class DirRes(CStruct):
 
         out = []
         tmp_off = off
-        for _ in range(nbr):
-            if tmp_off >= ofend:
-                break
-            if tmp_off + length >= len(raw):
-                log.warn('warning bad resource offset')
-                break
-            try:
-                entry, length = ResEntry.unpack_l(raw, tmp_off, self.parent_head)
-            except RuntimeError:
-                log.warn('bad resentry')
-                return None, tmp_off
-            out.append(entry)
-            tmp_off += length
         resdesc.resentries = struct_array(self, raw,
                                           off,
                                           ResEntry,
@@ -1372,17 +1364,21 @@ class DirRes(CStruct):
             return
         of1 = self.parent_head.NThdr.optentries[DIRECTORY_ENTRY_RESOURCE].rva
         raw[self.parent_head.rva2off(of1)] = bytes(self.resdesc)
-        dir_todo = {self.parent_head.NThdr.optentries[
-            DIRECTORY_ENTRY_RESOURCE].rva: self.resdesc}
+        length = len(self.resdesc)
+        dir_todo = {
+            self.parent_head.NThdr.optentries[DIRECTORY_ENTRY_RESOURCE].rva: self.resdesc
+        }
+        of1 = of1 + length
+        raw[self.parent_head.rva2off(of1)] = bytes(self.resdesc.resentries)
         dir_done = {}
         while dir_todo:
             of1, my_dir = dir_todo.popitem()
             dir_done[of1] = my_dir
             raw[self.parent_head.rva2off(of1)] = bytes(my_dir)
             of1 += len(my_dir)
+            raw[self.parent_head.rva2off(of1)] = bytes(my_dir.resentries)
             of_base = of1
             for entry in my_dir.resentries:
-                raw[of_base] = bytes(entry)
                 of_base += len(entry)
                 if entry.name_s:
                     raw[self.parent_head.rva2off(entry.name)] = bytes(entry.name_s)

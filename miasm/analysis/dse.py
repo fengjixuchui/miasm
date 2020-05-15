@@ -59,7 +59,7 @@ from future.utils import viewitems
 
 from miasm.core.utils import encode_hex, force_bytes
 from miasm.expression.expression import ExprMem, ExprInt, ExprCompose, \
-    ExprAssign, ExprId, ExprLoc, LocKey
+    ExprAssign, ExprId, ExprLoc, LocKey, canonize_to_exprloc
 from miasm.core.bin_stream import bin_stream_vm
 from miasm.jitter.emulatedsymbexec import EmulatedSymbExec
 from miasm.expression.expression_helper import possible_values
@@ -258,7 +258,7 @@ class DSEEngine(object):
 
         # lambda cannot contain statement
         def default_func(dse):
-            fname = b"%s_symb" % libimp.fad2cname[dse.jitter.pc]
+            fname = b"%s_symb" % force_bytes(libimp.fad2cname[dse.jitter.pc])
             raise RuntimeError("Symbolic stub '%s' not found" % fname)
 
         for addr, fname in viewitems(libimp.fad2cname):
@@ -633,19 +633,17 @@ class DSEPathConstraint(DSEEngine):
             self.cur_solver.add(self.z3_trans.from_expr(cons))
 
     def handle(self, cur_addr):
-        cur_addr = self.ir_arch.loc_db.canonize_to_exprloc(cur_addr)
+        cur_addr = canonize_to_exprloc(self.ir_arch.loc_db, cur_addr)
         symb_pc = self.eval_expr(self.ir_arch.IRDst)
         possibilities = possible_values(symb_pc)
         cur_path_constraint = set() # path_constraint for the concrete path
         if len(possibilities) == 1:
             dst = next(iter(possibilities)).value
-            dst = self.ir_arch.loc_db.canonize_to_exprloc(dst)
+            dst = canonize_to_exprloc(self.ir_arch.loc_db, dst)
             assert dst == cur_addr
         else:
             for possibility in possibilities:
-                target_addr = self.ir_arch.loc_db.canonize_to_exprloc(
-                    possibility.value
-                )
+                target_addr = canonize_to_exprloc(self.ir_arch.loc_db, possibility.value)
                 path_constraint = set() # Set of ExprAssign for the possible path
 
                 # Get constraint associated to the possible path

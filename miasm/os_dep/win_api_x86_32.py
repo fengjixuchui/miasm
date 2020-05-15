@@ -272,7 +272,7 @@ class mdl(object):
 
 def kernel32_HeapAlloc(jitter):
     ret_ad, args = jitter.func_args_stdcall(["heap", "flags", "size"])
-    alloc_addr = winobjs.heap.alloc(jitter, args.size)
+    alloc_addr = winobjs.heap.alloc(jitter, args.size, cmt=hex(ret_ad))
     jitter.func_ret_stdcall(ret_ad, alloc_addr)
 
 
@@ -505,7 +505,7 @@ def advapi32_CryptHashData(jitter):
 
     data = jitter.vm.get_mem(args.pbdata, args.dwdatalen)
     log.debug('will hash %X', args.dwdatalen)
-    log.debug(repr(data[:10]) + "...")
+    log.debug(repr(data[:0x10]) + "...")
     winobjs.cryptcontext[args.hhash].h.update(data)
     jitter.func_ret_stdcall(ret_ad, 1)
 
@@ -518,12 +518,18 @@ def advapi32_CryptGetHashParam(jitter):
         raise ValueError("unknown crypt context")
 
     if args.param == 2:
+        # HP_HASHVAL
         # XXX todo: save h state?
         h = winobjs.cryptcontext[args.hhash].h.digest()
+        jitter.vm.set_mem(args.pbdata, h)
+        jitter.vm.set_u32(args.dwdatalen, len(h))
+    elif args.param == 4:
+        # HP_HASHSIZE
+        ret = winobjs.cryptcontext[args.hhash].h.digest_size
+        jitter.vm.set_u32(args.pbdata, ret)
+        jitter.vm.set_u32(args.dwdatalen, 4)
     else:
         raise ValueError('not impl', args.param)
-    jitter.vm.set_mem(args.pbdata, h)
-    jitter.vm.set_u32(args.dwdatalen, len(h))
 
     jitter.func_ret_stdcall(ret_ad, 1)
 
@@ -606,7 +612,7 @@ def kernel32_CreateFile(jitter, funcname, get_str):
                         h = open(sb_fname, 'r+b')
                         ret = winobjs.handle_pool.add(sb_fname, h)
                 else:
-                    log.warning("FILE %r DOES NOT EXIST!", fname)
+                    log.warning("FILE %r (%s) DOES NOT EXIST!", fname, sb_fname)
             elif args.dwcreationdisposition == 1:
                 # create new
                 if os.access(sb_fname, os.R_OK):
@@ -759,11 +765,13 @@ def kernel32_VirtualProtect(jitter):
         jitter.vm.set_u32(args.lpfloldprotect, ACCESS_DICT_INV[old])
 
     paddr = args.lpvoid - (args.lpvoid % winobjs.alloc_align)
-    psize = args.dwsize
+    paddr_max = (args.lpvoid + args.dwsize + winobjs.alloc_align - 1)
+    paddr_max_round = paddr_max - (paddr_max % winobjs.alloc_align)
+    psize = paddr_max_round - paddr
     for addr, items in list(winobjs.allocated_pages.items()):
         alloc_addr, alloc_size = items
-        if not (alloc_addr <= paddr and
-                paddr + psize <= alloc_addr + alloc_size):
+        if (paddr + psize <= alloc_addr or
+            paddr > alloc_addr + alloc_size):
             continue
         size = jitter.vm.get_all_memory()[addr]["size"]
         # Page is included in Protect area
@@ -1112,20 +1120,21 @@ def kernel32_GetCommandLineW(jitter):
 def shell32_CommandLineToArgvW(jitter):
     ret_ad, args = jitter.func_args_stdcall(["pcmd", "pnumargs"])
     cmd = get_win_str_w(jitter, args.pcmd)
+    if cmd.startswith('"') and cmd.endswith('"'):
+        cmd = cmd[1:-1]
     log.info("CommandLineToArgv %r", cmd)
     tks = cmd.split(' ')
     addr = winobjs.heap.alloc(jitter, len(cmd) * 2 + 4 * len(tks))
     addr_ret = winobjs.heap.alloc(jitter, 4 * (len(tks) + 1))
     o = 0
     for i, t in enumerate(tks):
-        jitter.set_win_str_w(addr + o, t)
+        set_win_str_w(jitter, addr + o, t)
         jitter.vm.set_u32(addr_ret + 4 * i, addr + o)
         o += len(t)*2 + 2
 
-    jitter.vm.set_u32(addr_ret + 4 * i, 0)
+    jitter.vm.set_u32(addr_ret + 4 * (i+1), 0)
     jitter.vm.set_u32(args.pnumargs, len(tks))
     jitter.func_ret_stdcall(ret_ad, addr_ret)
-
 
 def cryptdll_MD5Init(jitter):
     ret_ad, args = jitter.func_args_stdcall(["ad_ctx"])
@@ -1333,7 +1342,7 @@ def ntoskrnl_RtlGetVersion(jitter):
                     0x2,  # min vers
                     0x666,  # build nbr
                     0x2,   # platform id
-                    ) + jitter.set_win_str_w("Service pack 4")
+                    ) + encode_win_str_w("Service pack 4")
 
     jitter.vm.set_mem(args.ptr_version, s)
     jitter.func_ret_stdcall(ret_ad, 0)
@@ -1519,7 +1528,7 @@ def kernel32_lstrcpy(jitter):
 def msvcrt__mbscpy(jitter):
     ret_ad, args = jitter.func_args_cdecl(["ptr_str1", "ptr_str2"])
     s2 = get_win_str_w(jitter, args.ptr_str2)
-    jitter.set_win_str_w(args.ptr_str1, s2)
+    set_win_str_w(jitter, args.ptr_str1, s2)
     jitter.func_ret_cdecl(ret_ad, args.ptr_str1)
 
 def msvcrt_wcscpy(jitter):
@@ -1533,7 +1542,7 @@ def kernel32_lstrcpyn(jitter):
     if len(s2) >= args.mlen:
         s2 = s2[:args.mlen - 1]
     log.info("Copy '%r'", s2)
-    jitter.set_win_str_a(args.ptr_str1, s2)
+    set_win_str_a(jitter, args.ptr_str1, s2)
     jitter.func_ret_stdcall(ret_ad, args.ptr_str1)
 
 
@@ -2877,7 +2886,7 @@ class win32_find_data(object):
         for k, v in viewitems(kargs):
             setattr(self, k, v)
 
-    def toStruct(self):
+    def toStruct(self, encode_str=encode_win_str_w):
         s = struct.pack('=IQQQIIII',
                         self.fileattrib,
                         self.creationtime,
@@ -2887,10 +2896,10 @@ class win32_find_data(object):
                         self.filesizelow,
                         self.dwreserved0,
                         self.dwreserved1)
-        fname = self.cfilename.encode('utf-8') + b'\x00' * MAX_PATH
+        fname = encode_str(self.cfilename) + b'\x00' * MAX_PATH
         fname = fname[:MAX_PATH]
         s += fname
-        fname = self.alternamefilename.encode('utf-8') + b'\x00' * 14
+        fname = encode_str(self.alternamefilename) + b'\x00' * 14
         fname = fname[:14]
         s += fname
         return s
@@ -2927,33 +2936,66 @@ class find_data_mngr(object):
 
         return fname
 
-
-def kernel32_FindFirstFileA(jitter):
-    ret_ad, args = jitter.func_args_stdcall(["pfilepattern", "pfindfiledata"])
-
-    filepattern = get_win_str_a(jitter, args.pfilepattern)
+def my_FindFirstFile(jitter, pfilepattern, pfindfiledata, get_win_str, encode_str):
+    filepattern = get_win_str(jitter, pfilepattern)
     h = winobjs.find_data.findfirst(filepattern)
 
     fname = winobjs.find_data.findnext(h)
     fdata = win32_find_data(cfilename=fname)
 
-    jitter.vm.set_mem(args.pfindfiledata, fdata.toStruct())
+    jitter.vm.set_mem(pfindfiledata, fdata.toStruct(encode_str=encode_str))
+    return h
+
+def kernel32_FindFirstFileA(jitter):
+    ret_ad, args = jitter.func_args_stdcall(["pfilepattern", "pfindfiledata"])
+    h = my_FindFirstFile(jitter, args.pfilepattern, args.pfindfiledata,
+                           get_win_str_a, encode_win_str_a)
     jitter.func_ret_stdcall(ret_ad, h)
 
+def kernel32_FindFirstFileW(jitter):
+    ret_ad, args = jitter.func_args_stdcall(["pfilepattern", "pfindfiledata"])
+    h = my_FindFirstFile(jitter, args.pfilepattern, args.pfindfiledata,
+                           get_win_str_w, encode_win_str_w)
+    jitter.func_ret_stdcall(ret_ad, h)
 
-def kernel32_FindNextFileA(jitter):
+def kernel32_FindFirstFileExA(jitter):
+    ret_ad, args = jitter.func_args_stdcall([
+        "lpFileName",
+        "fInfoLevelId",
+        "lpFindFileData",
+        "fSearchOp",
+        "lpSearchFilter",
+        "dwAdditionalFlags"])
+    h = my_FindFirstFile(jitter, args.lpFileName, args.lpFindFileData,
+                         get_win_str_a, encode_win_str_a)
+    jitter.func_ret_stdcall(ret_ad, h)
+
+def kernel32_FindFirstFileExW(jitter):
+    ret_ad, args = jitter.func_args_stdcall([
+        "lpFileName",
+        "fInfoLevelId",
+        "lpFindFileData",
+        "fSearchOp",
+        "lpSearchFilter",
+        "dwAdditionalFlags"])
+    h = my_FindFirstFile(jitter, args.lpFileName, args.lpFindFileData,
+                         get_win_str_w, encode_win_str_w)
+    jitter.func_ret_stdcall(ret_ad, h)
+
+def my_FindNextFile(jitter, encode_str):
     ret_ad, args = jitter.func_args_stdcall(["handle", "pfindfiledata"])
-
     fname = winobjs.find_data.findnext(args.handle)
     if fname is None:
+        winobjs.lastwin32error = 0x12 # ERROR_NO_MORE_FILES
         ret = 0
     else:
         ret = 1
         fdata = win32_find_data(cfilename=fname)
-        jitter.vm.set_mem(args.pfindfiledata, fdata.toStruct())
-
+        jitter.vm.set_mem(args.pfindfiledata, fdata.toStruct(encode_str=encode_str))
     jitter.func_ret_stdcall(ret_ad, ret)
 
+kernel32_FindNextFileA = lambda jitter: my_FindNextFile(jitter, encode_win_str_a)
+kernel32_FindNextFileW = lambda jitter: my_FindNextFile(jitter, encode_win_str_w)
 
 def kernel32_GetNativeSystemInfo(jitter):
     ret_ad, args = jitter.func_args_stdcall(["sys_ptr"])
