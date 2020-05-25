@@ -157,6 +157,9 @@ class c_winobjs(object):
         self.cryptcontext_num = 0
         self.cryptcontext = {}
         self.phhash_crypt_md5 = 0x55555
+        # key used by EncodePointer and DecodePointer
+        # (kernel32)
+        self.ptr_encode_key = 0xabababab
         self.files_hwnd = {}
         self.windowlong_dw = 0x77700
         self.module_cur_hwnd = 0x88800
@@ -420,6 +423,36 @@ def kernel32_CloseHandle(jitter):
     ret_ad, _ = jitter.func_args_stdcall(["hwnd"])
     jitter.func_ret_stdcall(ret_ad, 1)
 
+def kernel32_EncodePointer(jitter):
+    """
+        PVOID EncodePointer(
+            _In_ PVOID Ptr
+        );
+
+        Encoding globally available pointers helps protect them from being
+        exploited. The EncodePointer function obfuscates the pointer value
+        with a secret so that it cannot be predicted by an external agent.
+        The secret used by EncodePointer is different for each process.
+
+        A pointer must be decoded before it can be used.
+
+    """
+    ret, args = jitter.func_args_stdcall(1)
+    jitter.func_ret_stdcall(ret, args[0] ^ winobjs.ptr_encode_key)
+    return True
+
+def kernel32_DecodePointer(jitter):
+    """
+        PVOID DecodePointer(
+           PVOID Ptr
+        );
+
+        The function returns the decoded pointer.
+
+    """
+    ret, args = jitter.func_args_stdcall(1)
+    jitter.func_ret_stdcall(ret, args[0] ^ winobjs.ptr_encode_key)
+    return True
 
 def user32_GetForegroundWindow(jitter):
     ret_ad, _ = jitter.func_args_stdcall(0)
@@ -1644,7 +1677,8 @@ def kernel32_MultiByteToWideChar(jitter):
                                              "cchwidechar"])
     src = get_win_str_a(jitter, args.lpmultibytestr)
     l = len(src) + 1
-    set_win_str_w(jitter, args.lpwidecharstr, src)
+    if args.cchwidechar != 0:
+        set_win_str_w(jitter, args.lpwidecharstr, src)
     jitter.func_ret_stdcall(ret_ad, l)
 
 
@@ -3122,7 +3156,7 @@ class FLS(object):
         '''
         DWORD FlsAlloc(
           PFLS_CALLBACK_FUNCTION lpCallback
-        );    
+        );
         '''
         ret_ad, args = jitter.func_args_stdcall(["lpCallback"])
         index = len(self.slots)
@@ -3139,7 +3173,7 @@ class FLS(object):
         ret_ad, args = jitter.func_args_stdcall(["dwFlsIndex", "lpFlsData"])
         self.slots[args.dwFlsIndex] = args.lpFlsData
         jitter.func_ret_stdcall(ret_ad, 1)
-        
+
     def kernel32_FlsGetValue(self, jitter):
         '''
         PVOID FlsGetValue(
@@ -3147,8 +3181,8 @@ class FLS(object):
         );
         '''
         ret_ad, args = jitter.func_args_stdcall(["dwFlsIndex"])
-        jitter.func_ret_stdcall(ret_ad, self.slots[args.dwFlsIndex])        
-        
+        jitter.func_ret_stdcall(ret_ad, self.slots[args.dwFlsIndex])
+
 fls = FLS()
 
 
@@ -3171,15 +3205,15 @@ def kernel32_GetStdHandle(jitter):
     HANDLE WINAPI GetStdHandle(
       _In_ DWORD nStdHandle
     );
-    
-    STD_INPUT_HANDLE (DWORD)-10 	
+
+    STD_INPUT_HANDLE (DWORD)-10
     The standard input device. Initially, this is the console input buffer, CONIN$.
 
-    STD_OUTPUT_HANDLE (DWORD)-11 	
+    STD_OUTPUT_HANDLE (DWORD)-11
     The standard output device. Initially, this is the active console screen buffer, CONOUT$.
 
-    STD_ERROR_HANDLE (DWORD)-12 	
-    The standard error device. Initially, this is the active console screen buffer, CONOUT$.    
+    STD_ERROR_HANDLE (DWORD)-12
+    The standard error device. Initially, this is the active console screen buffer, CONOUT$.
     '''
     ret_ad, args = jitter.func_args_stdcall(["nStdHandle"])
     jitter.func_ret_stdcall(ret_ad, {
@@ -3188,7 +3222,7 @@ def kernel32_GetStdHandle(jitter):
         STD_INPUT_HANDLE: 3,
     }[args.nStdHandle])
 
-    
+
 FILE_TYPE_UNKNOWN = 0x0000
 FILE_TYPE_CHAR = 0x0002
 
@@ -3268,13 +3302,13 @@ def kernel32_IsProcessorFeaturePresent(jitter):
         17: False,
     }[args.ProcessorFeature])
 
-    
+
 def kernel32_GetACP(jitter):
     '''
     UINT GetACP();
     '''
     ret_ad, args = jitter.func_args_stdcall([])
-    # Windows-1252: Latin 1 / Western European  Superset of ISO-8859-1 (without C1 controls). 
+    # Windows-1252: Latin 1 / Western European  Superset of ISO-8859-1 (without C1 controls).
     jitter.func_ret_stdcall(ret_ad, 1252)
 
 
@@ -3299,7 +3333,7 @@ def kernel32_IsValidCodePage(jitter):
     );
     '''
     ret_ad, args = jitter.func_args_stdcall(["CodePage"])
-    jitter.func_ret_stdcall(ret_ad, args.CodePage in VALID_CODE_PAGES)    
+    jitter.func_ret_stdcall(ret_ad, args.CodePage in VALID_CODE_PAGES)
 
 
 def kernel32_GetCPInfo(jitter):
@@ -3312,8 +3346,8 @@ def kernel32_GetCPInfo(jitter):
     ret_ad, args = jitter.func_args_stdcall(["CodePage", "lpCPInfo"])
     assert args.CodePage == 1252
     # ref: http://www.rensselaer.org/dept/cis/software/g77-mingw32/include/winnls.h
-    #define MAX_LEADBYTES 	12
+    #define MAX_LEADBYTES       12
     #define MAX_DEFAULTCHAR	2
     jitter.vm.set_mem(args.lpCPInfo, struct.pack('<I', 0x1) + b'??' + b'\x00' * 12)
     jitter.func_ret_stdcall(ret_ad, 1)
-    
+
