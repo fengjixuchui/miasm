@@ -42,13 +42,6 @@ class AsmRaw(object):
         return str(self)
 
 
-class asm_raw(AsmRaw):
-
-    def __init__(self, raw=b""):
-        warnings.warn('DEPRECATION WARNING: use "AsmRaw" instead of "asm_raw"')
-        super(asm_label, self).__init__(raw)
-
-
 class AsmConstraint(object):
     c_to = "c_to"
     c_next = "c_next"
@@ -59,16 +52,6 @@ class AsmConstraint(object):
 
         self.loc_key = loc_key
         self.c_t = c_t
-
-    def get_label(self):
-        warnings.warn('DEPRECATION WARNING: use ".loc_key" instead of ".label"')
-        return self.loc_key
-
-    def set_label(self, loc_key):
-        warnings.warn('DEPRECATION WARNING: use ".loc_key" instead of ".label"')
-        self.loc_key = loc_key
-
-    label = property(get_label, set_label)
 
     def to_string(self, loc_db=None):
         if loc_db is None:
@@ -83,13 +66,6 @@ class AsmConstraint(object):
         return self.to_string()
 
 
-class asm_constraint(AsmConstraint):
-
-    def __init__(self, loc_key, c_t=AsmConstraint.c_to):
-        warnings.warn('DEPRECATION WARNING: use "AsmConstraint" instead of "asm_constraint"')
-        super(asm_constraint, self).__init__(loc_key, c_t)
-
-
 class AsmConstraintNext(AsmConstraint):
 
     def __init__(self, loc_key):
@@ -99,13 +75,6 @@ class AsmConstraintNext(AsmConstraint):
         )
 
 
-class asm_constraint_next(AsmConstraint):
-
-    def __init__(self, loc_key):
-        warnings.warn('DEPRECATION WARNING: use "AsmConstraintNext" instead of "asm_constraint_next"')
-        super(asm_constraint_next, self).__init__(loc_key)
-
-
 class AsmConstraintTo(AsmConstraint):
 
     def __init__(self, loc_key):
@@ -113,12 +82,6 @@ class AsmConstraintTo(AsmConstraint):
             loc_key,
             c_t=AsmConstraint.c_to
         )
-
-class asm_constraint_to(AsmConstraint):
-
-    def __init__(self, loc_key):
-        warnings.warn('DEPRECATION WARNING: use "AsmConstraintTo" instead of "asm_constraint_to"')
-        super(asm_constraint_to, self).__init__(loc_key)
 
 
 class AsmBlock(object):
@@ -131,13 +94,7 @@ class AsmBlock(object):
         self._loc_key = loc_key
         self.alignment = alignment
 
-    def get_label(self):
-        warnings.warn('DEPRECATION WARNING: use ".loc_key" instead of ".label"')
-        return self.loc_key
-
     loc_key = property(lambda self:self._loc_key)
-    label = property(get_label)
-
 
     def to_string(self, loc_db=None):
         out = []
@@ -290,13 +247,6 @@ class AsmBlock(object):
         )
 
 
-class asm_bloc(object):
-
-    def __init__(self, loc_key, alignment=1):
-        warnings.warn('DEPRECATION WARNING: use "AsmBlock" instead of "asm_bloc"')
-        super(asm_bloc, self).__init__(loc_key, alignment)
-
-
 class AsmBlockBad(AsmBlock):
 
     """Stand for a *bad* ASM block (malformed, unreachable,
@@ -345,26 +295,6 @@ class AsmBlockBad(AsmBlock):
         raise RuntimeError("An AsmBlockBad cannot be split")
 
 
-class asm_block_bad(AsmBlockBad):
-
-    def __init__(self, loc_key=None, alignment=1, errno=-1, *args, **kwargs):
-        warnings.warn('DEPRECATION WARNING: use "AsmBlockBad" instead of "asm_block_bad"')
-        super(asm_block_bad, self).__init__(loc_key, alignment, *args, **kwargs)
-
-class AsmSymbolPool(LocationDB):
-    """[DEPRECATED API] use 'LocationDB' instead"""
-
-    def __init__(self, *args, **kwargs):
-        warnings.warn("Deprecated API, use 'LocationDB' instead")
-        super(AsmSymbolPool, self).__init__(*args, **kwargs)
-
-class asm_symbol_pool(AsmSymbolPool):
-
-    def __init__(self):
-        warnings.warn('DEPRECATION WARNING: use "LocationDB" instead of "asm_symbol_pool"')
-        super(asm_symbol_pool, self).__init__()
-
-
 class AsmCFG(DiGraph):
 
     """Directed graph standing for a ASM Control Flow Graph with:
@@ -398,32 +328,6 @@ class AsmCFG(DiGraph):
         """Copy the current graph instance"""
         graph = self.__class__(self.loc_db)
         return graph + self
-
-
-    # Compatibility with old list API
-    def append(self, *args, **kwargs):
-        raise DeprecationWarning("AsmCFG is a graph, use add_node")
-
-    def remove(self, *args, **kwargs):
-        raise DeprecationWarning("AsmCFG is a graph, use del_node")
-
-    def __getitem__(self, *args, **kwargs):
-        raise DeprecationWarning("Order of AsmCFG elements is not reliable")
-
-    def __contains__(self, _):
-        """
-        DEPRECATED. Use:
-        - loc_key in AsmCFG.nodes() to test loc_key existence
-        """
-        raise RuntimeError("DEPRECATED")
-
-    def __iter__(self):
-        """
-        DEPRECATED. Use:
-        - AsmCFG.blocks() to iter on blocks
-        - loc_key in AsmCFG.nodes() to test loc_key existence
-        """
-        raise RuntimeError("DEPRECATED")
 
     def __len__(self):
         """Return the number of blocks in AsmCFG"""
@@ -609,16 +513,6 @@ class AsmCFG(DiGraph):
         """
         return self._pendings
 
-    def label2block(self, loc_key):
-        """
-        DEPRECATED: Use "loc_key_to_block" instead of "label2block"
-
-        Return the block corresponding to loc_key @loc_key
-        @loc_key: LocKey instance
-        """
-        warnings.warn('DEPRECATION WARNING: use "loc_key_to_block" instead of "label2block"')
-        return self.loc_key_to_block(loc_key)
-
     def rebuild_edges(self):
         """Consider blocks '.bto' and rebuild edges according to them, ie:
         - update constraint type
@@ -785,73 +679,8 @@ class AsmCFG(DiGraph):
             log_asmblock.info("size: %d max: %d", block.size, block.max_size)
 
     def apply_splitting(self, loc_db, dis_block_callback=None, **kwargs):
-        """Consider @self' bto destinations and split block in @self if one of
-        these destinations jumps in the middle of this block.
-        In order to work, they must be only one block in @self per loc_key in
-        @loc_db (which is true if @self come from the same disasmEngine).
-
-        @loc_db: LocationDB instance associated with @self'loc_keys
-        @dis_block_callback: (optional) if set, this callback will be called on
-        new block destinations
-        @kwargs: (optional) named arguments to pass to dis_block_callback
-        """
-        # Get all possible destinations not yet resolved, with a resolved
-        # offset
-        block_dst = []
-        for loc_key in self.pendings:
-            offset = loc_db.get_location_offset(loc_key)
-            if offset is not None:
-                block_dst.append(offset)
-
-        todo = set(self.blocks)
-        rebuild_needed = False
-
-        while todo:
-            # Find a block with a destination inside another one
-            cur_block = todo.pop()
-            range_start, range_stop = cur_block.get_range()
-
-            for off in block_dst:
-                if not (off > range_start and off < range_stop):
-                    continue
-
-                # `cur_block` must be split at offset `off`from miasm.core.locationdb import LocationDB
-
-                new_b = cur_block.split(loc_db, off)
-                log_asmblock.debug("Split block %x", off)
-                if new_b is None:
-                    log_asmblock.error("Cannot split %x!!", off)
-                    continue
-
-                # Remove pending from cur_block
-                # Links from new_b will be generated in rebuild_edges
-                for dst in new_b.bto:
-                    if dst.loc_key not in self.pendings:
-                        continue
-                    self.pendings[dst.loc_key] = set(pending for pending in self.pendings[dst.loc_key]
-                                                     if pending.waiter != cur_block)
-
-                # The new block destinations may need to be disassembled
-                if dis_block_callback:
-                    offsets_to_dis = set(
-                        self.loc_db.get_location_offset(constraint.loc_key)
-                        for constraint in new_b.bto
-                    )
-                    dis_block_callback(cur_bloc=new_b,
-                                       offsets_to_dis=offsets_to_dis,
-                                       loc_db=loc_db, **kwargs)
-
-                # Update structure
-                rebuild_needed = True
-                self.add_block(new_b)
-
-                # The new block must be considered
-                todo.add(new_b)
-                range_start, range_stop = cur_block.get_range()
-
-        # Rebuild edges to match new blocks'bto
-        if rebuild_needed:
-            self.rebuild_edges()
+        warnings.warn('DEPRECATION WARNING: apply_splitting is member of disasm_engine')
+        raise RuntimeError("Moved api")
 
     def __str__(self):
         out = []
@@ -1310,13 +1139,6 @@ def asmblock_final(mnemo, asmcfg, blockChains, loc_db, conservative=False):
             assemble_block(mnemo, block, loc_db, conservative)
 
 
-def asmbloc_final(mnemo, blocks, blockChains, loc_db, conservative=False):
-    """Resolve and assemble @blockChains using @loc_db until fixed point is
-    reached"""
-
-    warnings.warn('DEPRECATION WARNING: use "asmblock_final" instead of "asmbloc_final"')
-    asmblock_final(mnemo, blocks, blockChains, loc_db, conservative)
-
 def asm_resolve_final(mnemo, asmcfg, loc_db, dst_interval=None):
     """Resolve and assemble @asmcfg using @loc_db into interval
     @dst_interval"""
@@ -1374,8 +1196,7 @@ class disasmEngine(object):
      - lines_wd: maximum block's size (in number of instruction)
      - blocs_wd: maximum number of distinct disassembled block
 
-    + callback(arch, attrib, pool_bin, cur_bloc, offsets_to_dis,
-               loc_db)
+    + callback(mdis, cur_block, offsets_to_dis)
      - dis_block_callback: callback after each new disassembled block
     """
 
@@ -1404,31 +1225,6 @@ class disasmEngine(object):
 
         # Override options if needed
         self.__dict__.update(kwargs)
-
-    def get_job_done(self):
-        warnings.warn("""DEPRECATION WARNING: "job_done" is not needed anymore, support is dropped.""")
-        return set()
-
-    def set_job_done(self, _):
-        warnings.warn("""DEPRECATION WARNING: "job_done" is not needed anymore, support is dropped.""")
-        return
-
-    def get_dis_bloc_callback(self):
-        warnings.warn("""DEPRECATION WARNING: "dis_bloc_callback" use dis_block_callback.""")
-        return self.dis_block_callback
-
-    def set_dis_bloc_callback(self, function):
-        warnings.warn("""DEPRECATION WARNING: "dis_bloc_callback" use dis_block_callback.""")
-        self.dis_block_callback = function
-
-    @property
-    def symbol_pool(self):
-        warnings.warn("""DEPRECATION WARNING: use 'loc_db'""")
-        return self.loc_db
-
-    # Deprecated
-    job_done = property(get_job_done, set_job_done)
-    dis_bloc_callback = property(get_dis_bloc_callback, set_dis_bloc_callback)
 
     def _dis_block(self, offset, job_done=None):
         """Disassemble the block at offset @offset
@@ -1564,12 +1360,7 @@ class disasmEngine(object):
         cur_block.fix_constraints()
 
         if self.dis_block_callback is not None:
-            self.dis_block_callback(mn=self.arch, attrib=self.attrib,
-                                    pool_bin=self.bin_stream, cur_bloc=cur_block,
-                                    offsets_to_dis=offsets_to_dis,
-                                    loc_db=self.loc_db,
-                                    # Deprecated API
-                                    symbol_pool=self.loc_db)
+            self.dis_block_callback(self, cur_block, offsets_to_dis)
         return cur_block, offsets_to_dis
 
     def dis_block(self, offset):
@@ -1579,14 +1370,6 @@ class disasmEngine(object):
         """
         current_block, _ = self._dis_block(offset)
         return current_block
-
-    def dis_bloc(self, offset):
-        """
-        DEPRECATED function
-        Use dis_block instead of dis_bloc
-        """
-        warnings.warn('DEPRECATION WARNING: use "dis_block" instead of "dis_bloc"')
-        return self.dis_block(offset)
 
     def dis_multiblock(self, offset, blocks=None, job_done=None):
         """Disassemble every block reachable from @offset regarding
@@ -1618,19 +1401,71 @@ class disasmEngine(object):
             todo += nexts
             blocks.add_block(cur_block)
 
-        blocks.apply_splitting(self.loc_db,
-                               dis_block_callback=self.dis_block_callback,
-                               mn=self.arch, attrib=self.attrib,
-                               pool_bin=self.bin_stream)
+        self.apply_splitting(blocks)
         return blocks
 
-    def dis_multibloc(self, offset, blocs=None):
+    def apply_splitting(self, blocks):
+        """Consider @blocks' bto destinations and split block in @blocks if one
+        of these destinations jumps in the middle of this block.  In order to
+        work, they must be only one block in @self per loc_key in
+
+        @blocks: Asmcfg
         """
-        DEPRECATED function
-        Use dis_multiblock instead of dis_multibloc
-        """
-        warnings.warn('DEPRECATION WARNING: use "dis_multiblock" instead of "dis_multibloc"')
-        return self.dis_multiblock(offset, blocs)
+        # Get all possible destinations not yet resolved, with a resolved
+        # offset
+        block_dst = []
+        for loc_key in blocks.pendings:
+            offset = self.loc_db.get_location_offset(loc_key)
+            if offset is not None:
+                block_dst.append(offset)
+
+        todo = set(blocks.blocks)
+        rebuild_needed = False
+
+        while todo:
+            # Find a block with a destination inside another one
+            cur_block = todo.pop()
+            range_start, range_stop = cur_block.get_range()
+
+            for off in block_dst:
+                if not (off > range_start and off < range_stop):
+                    continue
+
+                # `cur_block` must be split at offset `off`from miasm.core.locationdb import LocationDB
+
+                new_b = cur_block.split(self.loc_db, off)
+                log_asmblock.debug("Split block %x", off)
+                if new_b is None:
+                    log_asmblock.error("Cannot split %x!!", off)
+                    continue
+
+                # Remove pending from cur_block
+                # Links from new_b will be generated in rebuild_edges
+                for dst in new_b.bto:
+                    if dst.loc_key not in blocks.pendings:
+                        continue
+                    blocks.pendings[dst.loc_key] = set(pending for pending in blocks.pendings[dst.loc_key]
+                                                     if pending.waiter != cur_block)
+
+                # The new block destinations may need to be disassembled
+                if self.dis_block_callback:
+                    offsets_to_dis = set(
+                        self.loc_db.get_location_offset(constraint.loc_key)
+                        for constraint in new_b.bto
+                    )
+                    self.dis_block_callback(self, new_b, offsets_to_dis)
+
+                # Update structure
+                rebuild_needed = True
+                blocks.add_block(new_b)
+
+                # The new block must be considered
+                todo.add(new_b)
+                range_start, range_stop = cur_block.get_range()
+
+        # Rebuild edges to match new blocks'bto
+        if rebuild_needed:
+            blocks.rebuild_edges()
 
     def dis_instr(self, offset):
         """Disassemble one instruction at offset @offset and return the
