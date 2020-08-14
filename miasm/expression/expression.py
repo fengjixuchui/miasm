@@ -38,8 +38,6 @@ from functools import cmp_to_key, total_ordering
 from future.utils import viewitems
 
 from miasm.core.utils import force_bytes, cmp_elts
-from miasm.expression.modint import mod_size2uint, is_modint, size2mask, \
-    define_uint
 from miasm.core.graph import DiGraph
 from functools import reduce
 
@@ -157,14 +155,6 @@ def is_associative(expr):
 def is_commutative(expr):
     "Return True iff current operation is commutative"
     return (expr.op in ['+', '*', '^', '&', '|'])
-
-def is_op_segm(expr):
-    """Returns True if is ExprOp and op == 'segm'"""
-    return expr.is_op('segm')
-
-def is_mem_segm(expr):
-    """Returns True if is ExprMem and ptr is_op_segm"""
-    return expr.is_mem() and is_op_segm(expr.ptr)
 
 def canonize_to_exprloc(locdb, expr):
     """
@@ -715,11 +705,13 @@ class Expr(object):
 
     def is_op_segm(self):
         """Returns True if is ExprOp and op == 'segm'"""
-        return False
+        warnings.warn('DEPRECATION WARNING: use is_op_segm(expr)')
+        raise RuntimeError("Moved api")
 
     def is_mem_segm(self):
         """Returns True if is ExprMem and ptr is_op_segm"""
-        return False
+        warnings.warn('DEPRECATION WARNING: use is_mem_segm(expr)')
+        raise RuntimeError("Moved api")
 
     def __contains__(self, expr):
         ret = contains_visitor.contains(self, expr)
@@ -761,8 +753,8 @@ class ExprInt(Expr):
 
 
     def __init__(self, arg, size):
-        """Create an ExprInt from a modint or num/size
-        @arg: 'intable' number
+        """Create an ExprInt from num/size
+        @arg: int/long number
         @size: int size"""
         super(ExprInt, self).__init__(size)
         # Work for ._arg is done in __new__
@@ -774,21 +766,12 @@ class ExprInt(Expr):
         return self.__class__, state
 
     def __new__(cls, arg, size):
-        """Create an ExprInt from a modint or num/size
-        @arg: 'intable' number
+        """Create an ExprInt from num/size
+        @arg: int/long number
         @size: int size"""
 
-        if is_modint(arg):
-            assert size == arg.size
-        # Avoid a common blunder
-        assert not isinstance(arg, ExprInt)
-
-        # Ensure arg is always a moduint
-        arg = int(arg)
-        if size not in mod_size2uint:
-            define_uint(size)
-        arg = mod_size2uint[size](arg)
-
+        assert isinstance(arg, int_types)
+        arg  = arg & ((1 << size) - 1)
         # Get the Singleton instance
         expr = Expr.get_object(cls, (arg, size))
 
@@ -796,15 +779,8 @@ class ExprInt(Expr):
         expr._arg = arg
         return expr
 
-    def _get_int(self):
-        "Return self integer representation"
-        return int(self._arg & size2mask(self._size))
-
     def __str__(self):
-        if self._arg < 0:
-            return str("-0x%X" % (- self._get_int()))
-        else:
-            return str("0x%X" % self._get_int())
+        return str("0x%X" % self.arg)
 
     def get_w(self):
         return set()
@@ -813,7 +789,7 @@ class ExprInt(Expr):
         return hash((EXPRINT, self._arg, self._size))
 
     def _exprrepr(self):
-        return "%s(0x%X, %d)" % (self.__class__.__name__, self._get_int(),
+        return "%s(0x%X, %d)" % (self.__class__.__name__, self.arg,
                                  self._size)
 
     def copy(self):
@@ -1196,7 +1172,8 @@ class ExprMem(Expr):
 
     def is_mem_segm(self):
         """Returns True if is ExprMem and ptr is_op_segm"""
-        return self._ptr.is_op_segm()
+        warnings.warn('DEPRECATION WARNING: use is_mem_segm(expr)')
+        raise RuntimeError("Moved api")
 
     def depth(self):
         return self._ptr.depth() + 1
@@ -1373,7 +1350,8 @@ class ExprOp(Expr):
 
     def is_op_segm(self):
         """Returns True if is ExprOp and op == 'segm'"""
-        return self.is_op('segm')
+        warnings.warn('DEPRECATION WARNING: use is_op_segm(expr)')
+        raise RuntimeError("Moved api")
 
 class ExprSlice(Expr):
 

@@ -3,7 +3,11 @@ import sys
 from builtins import range
 import struct
 import inspect
-from collections import MutableMapping as DictMixin
+
+try:
+    from collections.abc import MutableMapping as DictMixin
+except ImportError:
+    from collections import MutableMapping as DictMixin
 
 from operator import itemgetter
 import codecs
@@ -129,6 +133,9 @@ def decode_hex(value):
 def encode_hex(value):
     return _ENCODE_HEX(value)[0]
 
+def size2mask(size):
+    """Return the bit mask of size @size"""
+    return (1 << size) - 1
 
 def hexdump(src, length=16):
     lines = []
