@@ -137,10 +137,12 @@ def is_redirected_export(pe_obj, addr):
 
 
 def get_export_name_addr_list(e):
-    """Collect names and addresses of symbols exported by the given PE.
+    """Collect names/ordinals and addresses of symbols exported by the given PE.
     @e: PE instance
-    Returns a list of tuples (symbol name string, virtual address).
-    
+    Returns a list of tuples:
+        (symbol name string, virtual address)
+        (ordinal number, virtual address)
+
     Example:
 
         pe = miasm.analysis.binary.Container.from_string(buf)
@@ -148,6 +150,9 @@ def get_export_name_addr_list(e):
         assert exports[0] == ('AcquireSRWLockExclusive', 0x6b89b22a)
     """
     out = []
+    if e.DirExport.expdesc is None:
+        return out
+
     # add func name
     for i, n in enumerate(e.DirExport.f_names):
         addr = e.DirExport.f_address[e.DirExport.f_nameordinals[i].ordinal]
@@ -156,13 +161,6 @@ def get_export_name_addr_list(e):
         out.append((f_name, e.rva2virt(addr.rva)))
 
     # add func ordinal
-    for i, o in enumerate(e.DirExport.f_nameordinals):
-        addr = e.DirExport.f_address[o.ordinal]
-        # log.debug('%s %s %s' % (o.ordinal, e.DirExport.expdesc.base,
-        # hex(e.rva2virt(addr.rva))))
-        out.append(
-            (o.ordinal + e.DirExport.expdesc.base, e.rva2virt(addr.rva)))
-
     for i, s in enumerate(e.DirExport.f_address):
         if not s.rva:
             continue
