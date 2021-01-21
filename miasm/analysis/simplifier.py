@@ -3,6 +3,7 @@ Apply simplification passes to an IR cfg
 """
 
 import logging
+import warnings
 from functools import wraps
 from miasm.analysis.ssa import SSADiGraph
 from miasm.analysis.outofssa import UnSSADiGraph
@@ -46,9 +47,14 @@ class IRCFGSimplifier(object):
     This class applies passes until reaching a fix point
     """
 
-    def __init__(self, ir_arch):
-        self.ir_arch = ir_arch
+    def __init__(self, lifter):
+        self.lifter = lifter
         self.init_passes()
+
+    @property
+    def ir_arch(self):
+        warnings.warn('DEPRECATION WARNING: use ".lifter" instead of ".ir_arch"')
+        return self.lifter
 
     def init_passes(self):
         """
@@ -81,10 +87,10 @@ class IRCFGSimplifierCommon(IRCFGSimplifier):
     - simplify_ircfg
     - do_dead_simp_ircfg
     """
-    def __init__(self, ir_arch, expr_simp=expr_simp):
+    def __init__(self, lifter, expr_simp=expr_simp):
         self.expr_simp = expr_simp
-        super(IRCFGSimplifierCommon, self).__init__(ir_arch)
-        self.deadremoval = DeadRemoval(self.ir_arch)
+        super(IRCFGSimplifierCommon, self).__init__(lifter)
+        self.deadremoval = DeadRemoval(self.lifter)
 
     def init_passes(self):
         self.passes = [
@@ -133,10 +139,10 @@ class IRCFGSimplifierSSA(IRCFGSimplifierCommon):
     - do_dead_simp_ssa
     """
 
-    def __init__(self, ir_arch, expr_simp=expr_simp):
-        super(IRCFGSimplifierSSA, self).__init__(ir_arch, expr_simp)
+    def __init__(self, lifter, expr_simp=expr_simp):
+        super(IRCFGSimplifierSSA, self).__init__(lifter, expr_simp)
 
-        self.ir_arch.ssa_var = {}
+        self.lifter.ssa_var = {}
         self.all_ssa_vars = {}
 
         self.ssa_forbidden_regs = self.get_forbidden_regs()
@@ -144,7 +150,7 @@ class IRCFGSimplifierSSA(IRCFGSimplifierCommon):
         self.propag_expressions = PropagateExpressions()
         self.del_dummy_phi = DelDummyPhi()
 
-        self.deadremoval = DeadRemoval(self.ir_arch, self.all_ssa_vars)
+        self.deadremoval = DeadRemoval(self.lifter, self.all_ssa_vars)
 
     def get_forbidden_regs(self):
         """
@@ -152,9 +158,9 @@ class IRCFGSimplifierSSA(IRCFGSimplifierCommon):
         """
         regs = set(
             [
-                self.ir_arch.pc,
-                self.ir_arch.IRDst,
-                self.ir_arch.arch.regs.exception_flags
+                self.lifter.pc,
+                self.lifter.IRDst,
+                self.lifter.arch.regs.exception_flags
             ]
         )
         return regs
@@ -187,7 +193,7 @@ class IRCFGSimplifierSSA(IRCFGSimplifierCommon):
         ssa.ssa_variable_to_expr.update(self.all_ssa_vars)
         ssa.transform(head)
         self.all_ssa_vars.update(ssa.ssa_variable_to_expr)
-        self.ir_arch.ssa_var.update(ssa.ssa_variable_to_expr)
+        self.lifter.ssa_var.update(ssa.ssa_variable_to_expr)
         return ssa
 
     def ssa_to_unssa(self, ssa, head):
@@ -198,7 +204,7 @@ class IRCFGSimplifierSSA(IRCFGSimplifierCommon):
         @head: Location instance of the graph head
         """
         cfg_liveness = DiGraphLivenessSSA(ssa.graph)
-        cfg_liveness.init_var_info(self.ir_arch)
+        cfg_liveness.init_var_info(self.lifter)
         cfg_liveness.compute_liveness()
 
         UnSSADiGraph(ssa, head, cfg_liveness)
@@ -216,30 +222,12 @@ class IRCFGSimplifierSSA(IRCFGSimplifierCommon):
         return modified
 
     @fix_point
-    def do_propagate_int(self, ssa, head):
-        """
-        Constant propagation in the @ssa graph
-        @head: Location instance of the graph head
-        """
-        modified = self.propag_int.propagate(ssa, head)
-        return modified
-
-    @fix_point
     def do_del_unused_edges(self, ssa, head):
         """
         Del unused edges of the ssa graph
         @head: Location instance of the graph head
         """
         modified = del_unused_edges(ssa.graph, set([head]))
-        return modified
-
-    @fix_point
-    def do_propagate_mem(self, ssa, head):
-        """
-        Propagation of expression based on ExprInt/ExprId in the @ssa graph
-        @head: Location instance of the graph head
-        """
-        modified = self.propag_mem.propagate(ssa, head)
         return modified
 
     def do_propagate_expressions(self, ssa, head):
@@ -331,7 +319,7 @@ class IRCFGSimplifierSSA(IRCFGSimplifierCommon):
         ssa = self.ircfg_to_ssa(ircfg, head)
         ssa = self.do_simplify_loop(ssa, head)
         ircfg = self.ssa_to_unssa(ssa, head)
-        ircfg_simplifier = IRCFGSimplifierCommon(self.ir_arch)
+        ircfg_simplifier = IRCFGSimplifierCommon(self.lifter)
         ircfg_simplifier.deadremoval.add_expr_to_original_expr(self.all_ssa_vars)
         ircfg_simplifier.simplify(ircfg, head)
         return ircfg

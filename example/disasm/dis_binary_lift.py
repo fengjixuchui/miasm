@@ -25,11 +25,11 @@ asmcfg = mdis.dis_multiblock(addr)
 #    End common section             #
 #####################################
 
-# Get an IR converter
-ir_arch = machine.ir(mdis.loc_db)
+# Get a Lifter
+lifter = machine.lifter(mdis.loc_db)
 
 # Get the IR of the asmcfg
-ircfg = ir_arch.new_ircfg_from_asmcfg(asmcfg)
+ircfg = lifter.new_ircfg_from_asmcfg(asmcfg)
 
 # Display each IR basic blocks
 for irblock in viewvalues(ircfg.blocks):

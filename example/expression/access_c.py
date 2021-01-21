@@ -95,10 +95,10 @@ class MyExprToAccessC(ExprToAccessC):
     reduction_rules = ExprToAccessC.reduction_rules + [reduce_compose]
 
 
-def get_funcs_arg0(ctx, ira, ircfg, lbl_head):
+def get_funcs_arg0(ctx, lifter_model_call, ircfg, lbl_head):
     """Compute DependencyGraph on the func @lbl_head"""
     g_dep = DependencyGraph(ircfg, follow_call=False)
-    element = ira.arch.regs.RSI
+    element = lifter_model_call.arch.regs.RSI
 
     for loc_key, index in find_call(ircfg):
         irb = ircfg.get_block(loc_key)
@@ -106,7 +106,7 @@ def get_funcs_arg0(ctx, ira, ircfg, lbl_head):
         print('Analysing references from:', hex(instr.offset), instr)
         g_list = g_dep.get(irb.loc_key, set([element]), index, set([lbl_head]))
         for dep in g_list:
-            emul_result = dep.emul(ira, ctx)
+            emul_result = dep.emul(lifter_model_call, ctx)
             value = emul_result[element]
             yield value
 
@@ -144,28 +144,28 @@ types_mngr = CTypesManagerNotPacked(types_ast, base_types)
 cont = Container.fallback_container(data, None, addr=0)
 
 machine = Machine("x86_64")
-dis_engine, ira = machine.dis_engine, machine.ira
+dis_engine, lifter_model_call = machine.dis_engine, machine.lifter_model_call
 
 mdis = dis_engine(cont.bin_stream, loc_db=loc_db)
 addr_head = 0
 asmcfg = mdis.dis_multiblock(addr_head)
 lbl_head = loc_db.get_offset_location(addr_head)
 
-ir_arch_a = ira(loc_db)
-ircfg = ir_arch_a.new_ircfg_from_asmcfg(asmcfg)
+lifter = lifter_model_call(loc_db)
+ircfg = lifter.new_ircfg_from_asmcfg(asmcfg)
 
 open('graph_irflow.dot', 'w').write(ircfg.dot())
 
 # Main function's first argument's type is "struct ll_human*"
 ptr_llhuman = types_mngr.get_objc(CTypePtr(CTypeStruct('ll_human')))
 arg0 = ExprId('ptr', 64)
-ctx = {ir_arch_a.arch.regs.RDI: arg0}
+ctx = {lifter.arch.regs.RDI: arg0}
 expr_types = {arg0: (ptr_llhuman,),
               ExprInt(0x8A, 64): (ptr_llhuman,)}
 
 mychandler = MyCHandler(types_mngr, expr_types)
 
-for expr in get_funcs_arg0(ctx, ir_arch_a, ircfg, lbl_head):
+for expr in get_funcs_arg0(ctx, lifter, ircfg, lbl_head):
     print("Access:", expr)
     for c_str, ctype in mychandler.expr_to_c_and_types(expr):
         print('\taccess:', c_str)

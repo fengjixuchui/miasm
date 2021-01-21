@@ -25,7 +25,7 @@ import miasm.expression.expression as m2_expr
 from miasm.expression.simplifications import expr_simp
 from miasm.arch.x86.regs import *
 from miasm.arch.x86.arch import mn_x86, repeat_mn, replace_regs, is_mem_segm
-from miasm.ir.ir import IntermediateRepresentation, IRBlock, AssignBlock
+from miasm.ir.ir import Lifter, IRBlock, AssignBlock
 from miasm.core.sembuilder import SemBuilder
 from miasm.jitter.csts import EXCEPT_DIV_BY_ZERO, EXCEPT_ILLEGAL_INSN, \
     EXCEPT_PRIV_INSN, EXCEPT_SOFT_BP, EXCEPT_INT_XX, EXCEPT_INT_1, \
@@ -403,11 +403,16 @@ def gen_cmov(ir, instr, cond, dst, src, mov_if):
         dstA, dstB = loc_do_expr, loc_skip_expr
     else:
         dstA, dstB = loc_skip_expr, loc_do_expr
-    e = [m2_expr.ExprAssign(dst, dst)]
+    e = []
+    if instr.mode == 64:
+        # Force destination set in order to zero high bit orders
+        # In 64 bit:
+        # cmovz eax, ebx
+        # if zf == 0 => high part of RAX is set to zero
+        e.append(m2_expr.ExprAssign(dst, dst))
     e_do, extra_irs = mov(ir, instr, dst, src)
     e_do.append(m2_expr.ExprAssign(ir.IRDst, loc_skip_expr))
     e.append(m2_expr.ExprAssign(ir.IRDst, m2_expr.ExprCond(cond, dstA, dstB)))
-    e += set_float_cs_eip(instr)
     return e, [IRBlock(ir.loc_db, loc_do, [AssignBlock(e_do, instr)])]
 
 
@@ -642,7 +647,13 @@ def _rotate_tpl(ir, instr, dst, src, op, left=False):
             m2_expr.ExprAssign(of, new_of),
             m2_expr.ExprAssign(dst, res)
             ]
-    e = [m2_expr.ExprAssign(dst, dst)]
+    e = []
+    if instr.mode == 64:
+        # Force destination set in order to zero high bit orders
+        # In 64 bit:
+        # rol eax, cl
+        # if cl == 0 => high part of RAX is set to zero
+        e.append(m2_expr.ExprAssign(dst, dst))
     # Don't generate conditional shifter on constant
     if isinstance(shifter, m2_expr.ExprInt):
         if int(shifter) != 0:
@@ -776,7 +787,13 @@ def _shift_tpl(op, ir, instr, a, b, c=None, op_inv=None, left=False,
         m2_expr.ExprAssign(a, res),
     ]
     e_do += update_flag_znp(res)
-    e = [m2_expr.ExprAssign(a, a)]
+    e = []
+    if instr.mode == 64:
+        # Force destination set in order to zero high bit orders
+        # In 64 bit:
+        # shr eax, cl
+        # if cl == 0 => high part of RAX is set to zero
+        e.append(m2_expr.ExprAssign(a, a))
     # Don't generate conditional shifter on constant
     if isinstance(shifter, m2_expr.ExprInt):
         if int(shifter) != 0:
@@ -5731,10 +5748,10 @@ mnemo_func = {'mov': mov,
               }
 
 
-class ir_x86_16(IntermediateRepresentation):
+class Lifter_X86_16(Lifter):
 
     def __init__(self, loc_db):
-        IntermediateRepresentation.__init__(self, mn_x86, 16, loc_db)
+        Lifter.__init__(self, mn_x86, 16, loc_db)
         self.do_stk_segm = False
         self.do_ds_segm = False
         self.do_str_segm = False
@@ -5874,10 +5891,10 @@ class ir_x86_16(IntermediateRepresentation):
         return IRBlock(self.loc_db, irblock.loc_key, irs)
 
 
-class ir_x86_32(ir_x86_16):
+class Lifter_X86_32(Lifter_X86_16):
 
     def __init__(self, loc_db):
-        IntermediateRepresentation.__init__(self, mn_x86, 32, loc_db)
+        Lifter.__init__(self, mn_x86, 32, loc_db)
         self.do_stk_segm = False
         self.do_ds_segm = False
         self.do_str_segm = False
@@ -5888,10 +5905,10 @@ class ir_x86_32(ir_x86_16):
         self.addrsize = 32
 
 
-class ir_x86_64(ir_x86_16):
+class Lifter_X86_64(Lifter_X86_16):
 
     def __init__(self, loc_db):
-        IntermediateRepresentation.__init__(self, mn_x86, 64, loc_db)
+        Lifter.__init__(self, mn_x86, 64, loc_db)
         self.do_stk_segm = False
         self.do_ds_segm = False
         self.do_str_segm = False

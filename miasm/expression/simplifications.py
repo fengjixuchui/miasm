@@ -65,11 +65,13 @@ class ExpressionSimplifier(ExprVisitorCallbackBottomToTop):
             simplifications_common.simp_compose_and_mask,
             simplifications_common.simp_bcdadd_cf,
             simplifications_common.simp_bcdadd,
+            simplifications_common.simp_smod_sext,
         ],
 
         m2_expr.ExprSlice: [
             simplifications_common.simp_slice,
             simplifications_common.simp_slice_of_ext,
+            simplifications_common.simp_slice_of_sext,
             simplifications_common.simp_slice_of_op_ext,
         ],
         m2_expr.ExprCompose: [simplifications_common.simp_compose],
@@ -87,6 +89,7 @@ class ExpressionSimplifier(ExprVisitorCallbackBottomToTop):
             simplifications_common.simp_cond_sign_bit,
             simplifications_common.simp_cond_eq_1_0,
             simplifications_common.simp_cond_cc_flag,
+            simplifications_common.simp_cond_sub_cf,
         ],
         m2_expr.ExprMem: [simplifications_common.simp_mem],
 

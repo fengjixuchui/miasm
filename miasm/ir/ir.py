@@ -25,7 +25,7 @@ from future.utils import viewvalues, viewitems
 
 import miasm.expression.expression as m2_expr
 from miasm.expression.expression_helper import get_missing_interval
-from miasm.core.asmblock import AsmBlock, AsmConstraint
+from miasm.core.asmblock import AsmBlock, AsmBlockBad, AsmConstraint
 from miasm.core.graph import DiGraph
 from functools import reduce
 
@@ -539,7 +539,7 @@ class IRCFG(DiGraph):
             }
         )
         if node not in self._blocks:
-            yield [self.DotCellDescription(text="NOT PRESENT", attr={})]
+            yield [self.DotCellDescription(text="NOT PRESENT", attr={'bgcolor': 'red'})]
             return
         for i, assignblk in enumerate(self._blocks[node]):
             for dst, src in viewitems(assignblk):
@@ -706,7 +706,7 @@ class DiGraphIR(IRCFG):
         raise NotImplementedError("Deprecated")
 
 
-class IntermediateRepresentation(object):
+class Lifter(object):
     """
     Intermediate representation object
 
@@ -807,6 +807,9 @@ class IntermediateRepresentation(object):
         loc_key = block.loc_key
         ir_blocks_all = []
 
+        if isinstance(block, AsmBlockBad):
+            return ir_blocks_all
+
         assignments = []
         for instr in block.lines:
             if loc_key is None:
@@ -834,10 +837,10 @@ class IntermediateRepresentation(object):
         Use add_asmblock_to_ircfg instead of add_block
         """
         warnings.warn("""DEPRECATION WARNING
-        ircfg is now out of IntermediateRepresentation
+        ircfg is now out of Lifter
         Use:
-        ircfg = ir_arch.new_ircfg()
-        ir_arch.add_asmblock_to_ircfg(block, ircfg)
+        ircfg = lifter.new_ircfg()
+        lifter.add_asmblock_to_ircfg(block, ircfg)
         """)
         raise RuntimeError("API Deprecated")
 
@@ -918,12 +921,23 @@ class IntermediateRepresentation(object):
         return new_irblocks
 
 
-class ir(IntermediateRepresentation):
+class IntermediateRepresentation(Lifter):
     """
     DEPRECATED object
-    Use IntermediateRepresentation instead of ir
+    Use Lifter instead of IntermediateRepresentation
+    """
+
+    def __init__(self, arch, attrib, loc_db):
+        warnings.warn('DEPRECATION WARNING: use "Lifter" instead of "IntermediateRepresentation"')
+        super(IntermediateRepresentation, self).__init__(arch, attrib, loc_db)
+
+
+class ir(Lifter):
+    """
+    DEPRECATED object
+    Use Lifter instead of ir
     """
 
     def __init__(self, loc_key, irs, lines=None):
-        warnings.warn('DEPRECATION WARNING: use "IntermediateRepresentation" instead of "ir"')
+        warnings.warn('DEPRECATION WARNING: use "Lifter" instead of "ir"')
         super(ir, self).__init__(loc_key, irs, lines)

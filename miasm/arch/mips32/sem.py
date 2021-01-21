@@ -1,9 +1,9 @@
 import miasm.expression.expression as m2_expr
-from miasm.ir.ir import IntermediateRepresentation, IRBlock, AssignBlock
+from miasm.ir.ir import Lifter, IRBlock, AssignBlock
 from miasm.arch.mips32.arch import mn_mips32
 from miasm.arch.mips32.regs import R_LO, R_HI, PC, RA, ZERO, exception_flags
 from miasm.core.sembuilder import SemBuilder
-from miasm.jitter.csts import EXCEPT_DIV_BY_ZERO
+from miasm.jitter.csts import EXCEPT_DIV_BY_ZERO, EXCEPT_SOFT_BP
 
 
 # SemBuilder context
@@ -64,24 +64,24 @@ def l_b(arg1):
 def lbu(arg1, arg2):
     """A byte is loaded (unsigned extended) into a register @arg1 from the
     specified address @arg2."""
-    arg1 = mem8[arg2.ptr].zeroExtend(32)
+    arg1 = m2_expr.ExprMem(arg2.ptr, 8).zeroExtend(32)
 
 @sbuild.parse
 def lh(arg1, arg2):
     """A word is loaded into a register @arg1 from the
     specified address @arg2."""
-    arg1 = mem16[arg2.ptr].signExtend(32)
+    arg1 = m2_expr.ExprMem(arg2.ptr, 16).signExtend(32)
 
 @sbuild.parse
 def lhu(arg1, arg2):
     """A word is loaded (unsigned extended) into a register @arg1 from the
     specified address @arg2."""
-    arg1 = mem16[arg2.ptr].zeroExtend(32)
+    arg1 = m2_expr.ExprMem(arg2.ptr, 16).zeroExtend(32)
 
 @sbuild.parse
 def lb(arg1, arg2):
     "A byte is loaded into a register @arg1 from the specified address @arg2."
-    arg1 = mem8[arg2.ptr].signExtend(32)
+    arg1 = m2_expr.ExprMem(arg2.ptr, 8).signExtend(32)
 
 @sbuild.parse
 def ll(arg1, arg2):
@@ -212,15 +212,17 @@ def slt(arg1, arg2, arg3):
 def l_sub(arg1, arg2, arg3):
     arg1 = arg2 - arg3
 
-@sbuild.parse
 def sb(arg1, arg2):
     """The least significant byte of @arg1 is stored at the specified address
     @arg2."""
-    mem8[arg2.ptr] = arg1[:8]
+    e = []
+    e.append(m2_expr.ExprMem(arg2.ptr, 8), arg1[:8])
+    return e, []
 
-@sbuild.parse
 def sh(arg1, arg2):
-    mem16[arg2.ptr] = arg1[:16]
+    e = []
+    e.append(m2_expr.ExprMem(arg2.ptr, 16), arg1[:16])
+    return e, []
 
 @sbuild.parse
 def movn(arg1, arg2, arg3):
@@ -393,6 +395,11 @@ def tlbwr():
 def tlbr():
     "TODO XXX"
 
+def break_(ir, instr):
+    e = []
+    e.append(ExprAssign(exception_flags, ExprInt(EXCEPT_SOFT_BP, 32)))
+    return e, []
+
 def ins(ir, instr, a, b, c, d):
     e = []
     pos = int(c)
@@ -524,7 +531,7 @@ def mtlo(arg1):
 
 def clz(ir, instr, rs, rd):
     e = []
-    e.append(ExprAssign(rd, ExprOp('cntleadzeros', rs)))
+    e.append(m2_expr.ExprAssign(rd, m2_expr.ExprOp('cntleadzeros', rs)))
     return e, []
 
 def teq(ir, instr, arg1, arg2):
@@ -573,7 +580,8 @@ def tne(ir, instr, arg1, arg2):
 
 
 mnemo_func = sbuild.functions
-mnemo_func.update({
+mnemo_func.update(
+    {
         'add.d': add_d,
         'addu': addiu,
         'addi': addiu,
@@ -599,17 +607,21 @@ mnemo_func.update({
         'xori': l_xor,
         'clz': clz,
         'teq': teq,
-        'tne': tne
-        })
+        'tne': tne,
+        'break': break_,
+        'sb': sb,
+        'sh': sh,
+    }
+)
 
 def get_mnemo_expr(ir, instr, *args):
     instr, extra_ir = mnemo_func[instr.name.lower()](ir, instr, *args)
     return instr, extra_ir
 
-class ir_mips32l(IntermediateRepresentation):
+class Lifter_Mips32l(Lifter):
 
     def __init__(self, loc_db):
-        IntermediateRepresentation.__init__(self, mn_mips32, 'l', loc_db)
+        Lifter.__init__(self, mn_mips32, 'l', loc_db)
         self.pc = mn_mips32.getpc()
         self.sp = mn_mips32.getsp()
         self.IRDst = m2_expr.ExprId('IRDst', 32)
@@ -640,10 +652,10 @@ class ir_mips32l(IntermediateRepresentation):
     def get_next_delay_loc_key(self, instr):
         return self.loc_db.get_or_create_offset_location(instr.offset + 16)
 
-class ir_mips32b(ir_mips32l):
+class Lifter_Mips32b(Lifter_Mips32l):
     def __init__(self, loc_db):
         self.addrsize = 32
-        IntermediateRepresentation.__init__(self, mn_mips32, 'b', loc_db)
+        Lifter.__init__(self, mn_mips32, 'b', loc_db)
         self.pc = mn_mips32.getpc()
         self.sp = mn_mips32.getsp()
         self.IRDst = m2_expr.ExprId('IRDst', 32)

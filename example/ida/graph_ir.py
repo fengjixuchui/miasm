@@ -16,8 +16,9 @@ from miasm.expression.simplifications import expr_simp
 from miasm.ir.ir import IRBlock, AssignBlock
 from miasm.analysis.data_flow import load_from_int
 from utils import guess_machine, expr2colorstr
+from miasm.expression.expression import ExprLoc, ExprInt, ExprOp, ExprAssign
 from miasm.analysis.simplifier import IRCFGSimplifierCommon, IRCFGSimplifierSSA
-
+from miasm.core.locationdb import LocationDB
 
 
 
@@ -26,8 +27,9 @@ TYPE_GRAPH_IRSSA = 1
 TYPE_GRAPH_IRSSAUNSSA = 2
 
 OPTION_GRAPH_CODESIMPLIFY = 1
-OPTION_GRAPH_DONTMODSTACK = 2
-OPTION_GRAPH_LOADMEMINT = 4
+OPTION_GRAPH_USE_IDA_STACK = 2
+OPTION_GRAPH_DONTMODSTACK = 4
+OPTION_GRAPH_LOADMEMINT = 8
 
 
 class GraphIRForm(ida_kernwin.Form):
@@ -47,6 +49,7 @@ Analysis:
 
 Options:
 <Simplify code:{rCodeSimplify}>
+<Use ida stack:{rUseIdaStack}>
 <Subcalls dont change stack:{rDontModStack}>
 <Load static memory:{rLoadMemInt}>{cOptions}>
 """,
@@ -62,6 +65,7 @@ Options:
                 'cOptions': ida_kernwin.Form.ChkGroupControl(
                     (
                         "rCodeSimplify",
+                        "rUseIdaStack",
                         "rDontModStack",
                         "rLoadMemInt"
                     )
@@ -70,6 +74,7 @@ Options:
         )
         form, _ = self.Compile()
         form.rCodeSimplify.checked = True
+        form.rUseIdaStack.checked = True
         form.rDontModStack.checked = False
         form.rLoadMemInt.checked = False
 
@@ -98,14 +103,14 @@ def label_str(self):
     return "%s:%s" % (self.name, self.offset)
 
 
-def color_irblock(irblock, ir_arch):
+def color_irblock(irblock, lifter):
     out = []
-    lbl = idaapi.COLSTR("%s:" % ir_arch.loc_db.pretty_str(irblock.loc_key), idaapi.SCOLOR_INSN)
+    lbl = idaapi.COLSTR("%s:" % lifter.loc_db.pretty_str(irblock.loc_key), idaapi.SCOLOR_INSN)
     out.append(lbl)
     for assignblk in irblock:
         for dst, src in sorted(viewitems(assignblk)):
-            dst_f = expr2colorstr(dst, loc_db=ir_arch.loc_db)
-            src_f = expr2colorstr(src, loc_db=ir_arch.loc_db)
+            dst_f = expr2colorstr(dst, loc_db=lifter.loc_db)
+            src_f = expr2colorstr(src, loc_db=lifter.loc_db)
             line = idaapi.COLSTR("%s = %s" % (dst_f, src_f), idaapi.SCOLOR_INSN)
             out.append('    %s' % line)
         out.append("")
@@ -173,22 +178,36 @@ def is_addr_ro_variable(bs, addr, size):
     return True
 
 
-def build_graph(start_addr, type_graph, simplify=False, dontmodstack=True, loadint=False, verbose=False):
+def build_graph(start_addr, type_graph, simplify=False, use_ida_stack=True, dontmodstack=False, loadint=False, verbose=False):
     machine = guess_machine(addr=start_addr)
-    dis_engine, ira = machine.dis_engine, machine.ira
+    dis_engine, lifter_model_call = machine.dis_engine, machine.lifter_model_call
 
-    class IRADelModCallStack(ira):
+    class IRADelModCallStack(lifter_model_call):
         def call_effects(self, addr, instr):
             assignblks, extra = super(IRADelModCallStack, self).call_effects(addr, instr)
-            if not dontmodstack:
-                return assignblks, extra
-            out = []
-            for assignblk in assignblks:
-                dct = dict(assignblk)
-                dct = {
-                    dst:src for (dst, src) in viewitems(dct) if dst != self.sp
-                }
-                out.append(AssignBlock(dct, assignblk.instr))
+            if use_ida_stack:
+                stk_before = idc.get_spd(instr.offset)
+                stk_after = idc.get_spd(instr.offset + instr.l)
+                stk_diff = stk_after - stk_before
+                print(hex(stk_diff))
+                call_assignblk = AssignBlock(
+                    [
+                        ExprAssign(self.ret_reg, ExprOp('call_func_ret', addr)),
+                        ExprAssign(self.sp, self.sp + ExprInt(stk_diff, self.sp.size))
+                    ],
+                    instr
+                )
+                return [call_assignblk], []
+            else:
+                if not dontmodstack:
+                    return assignblks, extra
+                out = []
+                for assignblk in assignblks:
+                    dct = dict(assignblk)
+                    dct = {
+                        dst:src for (dst, src) in viewitems(dct) if dst != self.sp
+                    }
+                    out.append(AssignBlock(dct, assignblk.instr))
             return out, extra
 
 
@@ -200,19 +219,21 @@ def build_graph(start_addr, type_graph, simplify=False, dontmodstack=True, loadi
         print(fname)
 
     bs = bin_stream_ida()
-    mdis = dis_engine(bs)
-    ir_arch = IRADelModCallStack(mdis.loc_db)
+    loc_db = LocationDB()
+
+    mdis = dis_engine(bs, loc_db=loc_db)
+    lifter = IRADelModCallStack(loc_db)
 
 
     # populate symbols with ida names
     for addr, name in idautils.Names():
         if name is None:
             continue
-        if (mdis.loc_db.get_offset_location(addr) or
-            mdis.loc_db.get_name_location(name)):
+        if (loc_db.get_offset_location(addr) or
+            loc_db.get_name_location(name)):
             # Symbol alias
             continue
-        mdis.loc_db.add_location(name, addr)
+        loc_db.add_location(name, addr)
 
     if verbose:
         print("start disasm")
@@ -220,13 +241,13 @@ def build_graph(start_addr, type_graph, simplify=False, dontmodstack=True, loadi
         print(hex(start_addr))
 
     asmcfg = mdis.dis_multiblock(start_addr)
-    entry_points = set([mdis.loc_db.get_offset_location(start_addr)])
+    entry_points = set([loc_db.get_offset_location(start_addr)])
     if verbose:
         print("generating graph")
         open('asm_flow.dot', 'w').write(asmcfg.dot())
         print("generating IR... %x" % start_addr)
 
-    ircfg = ir_arch.new_ircfg_from_asmcfg(asmcfg)
+    ircfg = lifter.new_ircfg_from_asmcfg(asmcfg)
 
     if verbose:
         print("IR ok... %x" % start_addr)
@@ -239,7 +260,7 @@ def build_graph(start_addr, type_graph, simplify=False, dontmodstack=True, loadi
                 for dst, src in viewitems(assignblk)
             }
             irs.append(AssignBlock(new_assignblk, instr=assignblk.instr))
-        ircfg.blocks[irb.loc_key] = IRBlock(irb.loc_db, irb.loc_key, irs)
+        ircfg.blocks[irb.loc_key] = IRBlock(loc_db, irb.loc_key, irs)
 
     if verbose:
         out = ircfg.dot()
@@ -250,7 +271,7 @@ def build_graph(start_addr, type_graph, simplify=False, dontmodstack=True, loadi
     head = list(entry_points)[0]
 
     if simplify:
-        ircfg_simplifier = IRCFGSimplifierCommon(ir_arch)
+        ircfg_simplifier = IRCFGSimplifierCommon(lifter)
         ircfg_simplifier.simplify(ircfg, head)
         title += " (simplified)"
 
@@ -260,7 +281,7 @@ def build_graph(start_addr, type_graph, simplify=False, dontmodstack=True, loadi
         return
 
 
-    class IRAOutRegs(ira):
+    class IRAOutRegs(lifter_model_call):
         def get_out_regs(self, block):
             regs_todo = super(IRAOutRegs, self).get_out_regs(block)
             out = {}
@@ -281,7 +302,7 @@ def build_graph(start_addr, type_graph, simplify=False, dontmodstack=True, loadi
         if irblock is None:
             continue
         regs = {}
-        for reg in ir_arch.get_out_regs(irblock):
+        for reg in lifter.get_out_regs(irblock):
             regs[reg] = reg
         assignblks = list(irblock)
         new_assiblk = AssignBlock(regs, assignblks[-1].instr)
@@ -305,7 +326,7 @@ def build_graph(start_addr, type_graph, simplify=False, dontmodstack=True, loadi
                 ret = ssa.graph
             elif type_graph == TYPE_GRAPH_IRSSAUNSSA:
                 ircfg = self.ssa_to_unssa(ssa, head)
-                ircfg_simplifier = IRCFGSimplifierCommon(self.ir_arch)
+                ircfg_simplifier = IRCFGSimplifierCommon(self.lifter)
                 ircfg_simplifier.simplify(ircfg, head)
                 ret = ircfg
             else:
@@ -314,7 +335,7 @@ def build_graph(start_addr, type_graph, simplify=False, dontmodstack=True, loadi
 
 
     head = list(entry_points)[0]
-    simplifier = CustomIRCFGSimplifierSSA(ir_arch)
+    simplifier = CustomIRCFGSimplifierSSA(lifter)
     ircfg = simplifier.simplify(ircfg, head)
     open('final.dot', 'w').write(ircfg.dot())
 
@@ -336,6 +357,7 @@ def function_graph_ir():
         func_addr,
         settings.cScope.value,
         simplify=settings.cOptions.value & OPTION_GRAPH_CODESIMPLIFY,
+        use_ida_stack=settings.cOptions.value & OPTION_GRAPH_USE_IDA_STACK,
         dontmodstack=settings.cOptions.value & OPTION_GRAPH_DONTMODSTACK,
         loadint=settings.cOptions.value & OPTION_GRAPH_LOADMEMINT,
         verbose=False

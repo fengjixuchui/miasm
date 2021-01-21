@@ -2,7 +2,7 @@ from __future__ import print_function
 from builtins import range
 
 import miasm.expression.expression as expr
-from miasm.ir.ir import AssignBlock, IntermediateRepresentation, IRBlock
+from miasm.ir.ir import AssignBlock, Lifter, IRBlock
 from miasm.arch.ppc.arch import mn_ppc
 from miasm.arch.ppc.regs import *
 from miasm.core.sembuilder import SemBuilder
@@ -418,7 +418,7 @@ def mn_mtspr(ir, instr, arg1, arg2):
                  ExprAssign(exception_flags, ExprInt(EXCEPT_SPR_ACCESS, 32)) ], []
 
 def mn_mtsr(ir, instr, sr, rs):
-    srid = sr.arg.arg
+    srid = sr.arg
     return [ ExprAssign(sr_dict[srid], rs) ], []
 
 # TODO
@@ -426,7 +426,7 @@ def mn_mtsr(ir, instr, sr, rs):
 #    return [ ExprAssign(sr_dict[rb[0:3]], rs) ], []
 
 def mn_mfsr(ir, instr, rd, sr):
-    srid = sr.arg.arg
+    srid = sr.arg
     return [ ExprAssign(rd, sr_dict[srid]) ], []
 
 # TODO
@@ -897,10 +897,10 @@ sem_dir = {
 }
 
 
-class ir_ppc32b(IntermediateRepresentation):
+class Lifter_PPC32b(Lifter):
 
     def __init__(self, loc_db):
-        super(ir_ppc32b, self).__init__(mn_ppc, 'b', loc_db)
+        super(Lifter_PPC32b, self).__init__(mn_ppc, 'b', loc_db)
         self.pc = mn_ppc.getpc()
         self.sp = mn_ppc.getsp()
         self.IRDst = expr.ExprId('IRDst', 32)

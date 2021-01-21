@@ -3,7 +3,7 @@ from future.utils import viewitems
 
 from miasm.expression.expression import ExprId, ExprInt, ExprLoc, ExprMem, \
     ExprCond, ExprCompose, ExprOp, ExprAssign
-from miasm.ir.ir import IntermediateRepresentation, IRBlock, AssignBlock
+from miasm.ir.ir import Lifter, IRBlock, AssignBlock
 from miasm.arch.aarch64.arch import mn_aarch64, conds_expr, replace_regs
 from miasm.arch.aarch64.regs import *
 from miasm.core.sembuilder import SemBuilder
@@ -1270,7 +1270,10 @@ def get_mem_access(mem):
     updt = None
     if isinstance(mem, ExprOp):
         if mem.op == 'preinc':
-            addr = mem.args[0] + mem.args[1]
+            if len(mem.args) == 1:
+                addr = mem.args[0]
+            else:
+                addr = mem.args[0] + mem.args[1]
         elif mem.op == 'segm':
             base = mem.args[0]
             op, (reg, shift) = mem.args[1].op, mem.args[1].args
@@ -1361,6 +1364,24 @@ def ldaxrb(ir, instr, arg1, arg2):
     e.append(ExprAssign(arg1, ExprMem(ptr, 8).zeroExtend(arg1.size)))
     return e, []
 
+def ldxr(ir, instr, arg1, arg2):
+    # TODO XXX no memory lock implemented
+    assert arg2.is_op('preinc')
+    assert len(arg2.args) == 1
+    ptr = arg2.args[0]
+    e = []
+    e.append(ExprAssign(arg1, ExprMem(ptr, arg1.size).zeroExtend(arg1.size)))
+    return e, []
+
+def stlxr(ir, instr, arg1, arg2, arg3):
+    assert arg3.is_op('preinc')
+    assert len(arg3.args) == 1
+    ptr = arg3.args[0]
+    e = []
+    e.append(ExprAssign(ExprMem(ptr, arg2.size), arg2))
+    # TODO XXX here, force update success
+    e.append(ExprAssign(arg1, ExprInt(0, arg1.size)))
+    return e, []
 
 def stlxrb(ir, instr, arg1, arg2, arg3):
     assert arg3.is_op('preinc')
@@ -1372,6 +1393,11 @@ def stlxrb(ir, instr, arg1, arg2, arg3):
     e.append(ExprAssign(arg1, ExprInt(0, arg1.size)))
     return e, []
 
+def stlrb(ir, instr, arg1, arg2):
+    ptr = arg2.args[0]
+    e = []
+    e.append(ExprAssign(ExprMem(ptr, 8), arg1[:8]))
+    return e, []
 
 def l_str(ir, instr, arg1, arg2):
     e = []
@@ -1830,6 +1856,31 @@ def nop():
     """Do nothing"""
 
 
+@sbuild.parse
+def dsb(arg1):
+    """Data Synchronization Barrier"""
+
+@sbuild.parse
+def isb(arg1):
+    """Instruction Synchronization Barrier"""
+
+@sbuild.parse
+def dmb(arg1):
+    """Data Memory Barrier"""
+
+@sbuild.parse
+def tlbi(arg1, arg2, arg3, arg4):
+    """TLB invalidate operation"""
+
+@sbuild.parse
+def clrex(arg1):
+    """Clear the local monitor of the executing PE"""
+
+@sbuild.parse
+def ic(arg1, arg2, arg3, arg4):
+    """Instruction/Data cache operation"""
+
+
 def rev(ir, instr, arg1, arg2):
     out = []
     for i in range(0, arg2.size, 8):
@@ -2158,10 +2209,17 @@ mnemo_func.update({
     'ldrsh': ldrsh,
     'ldrsw': ldrsw,
 
+    'ldar': ldr, # TODO memory barrier
     'ldarb': ldrb,
 
     'ldaxrb': ldaxrb,
     'stlxrb': stlxrb,
+
+    'stlr': l_str, # TODO memory barrier
+    'stlrb': stlrb,
+
+    'stlxr': stlxr,
+    'ldxr': ldxr,
 
     'str': l_str,
     'strb': strb,
@@ -2210,7 +2268,13 @@ mnemo_func.update({
     'caspa':casp,
     'caspal':casp,
 
-
+    'yield': nop,
+    'isb': isb,
+    'dsb': dsb,
+    'dmb': dmb,
+    'tlbi': tlbi,
+    'clrex': clrex,
+    'ic': ic
 })
 
 
@@ -2226,10 +2290,10 @@ class aarch64info(object):
     # offset
 
 
-class ir_aarch64l(IntermediateRepresentation):
+class Lifter_Aarch64l(Lifter):
 
     def __init__(self, loc_db):
-        IntermediateRepresentation.__init__(self, mn_aarch64, "l", loc_db)
+        Lifter.__init__(self, mn_aarch64, "l", loc_db)
         self.pc = PC
         self.sp = SP
         self.IRDst = ExprId('IRDst', 64)
@@ -2312,10 +2376,10 @@ class ir_aarch64l(IntermediateRepresentation):
         return instr_ir, new_irblocks
 
 
-class ir_aarch64b(ir_aarch64l):
+class Lifter_Aarch64b(Lifter_Aarch64l):
 
     def __init__(self, loc_db):
-        IntermediateRepresentation.__init__(self, mn_aarch64, "b", loc_db)
+        Lifter.__init__(self, mn_aarch64, "b", loc_db)
         self.pc = PC
         self.sp = SP
         self.IRDst = ExprId('IRDst', 64)

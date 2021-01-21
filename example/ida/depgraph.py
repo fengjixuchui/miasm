@@ -15,6 +15,7 @@ import ida_kernwin
 from miasm.core.bin_stream_ida import bin_stream_ida
 from miasm.core.asmblock import *
 from miasm.expression import expression as m2_expr
+from miasm.core.locationdb import LocationDB
 
 from miasm.expression.simplifications import expr_simp
 from miasm.analysis.depgraph import DependencyGraph
@@ -25,9 +26,9 @@ from utils import guess_machine
 
 class depGraphSettingsForm(ida_kernwin.Form):
 
-    def __init__(self, ira, ircfg, mn):
+    def __init__(self, lifter_model_call, ircfg, mn):
 
-        self.ira = ira
+        self.lifter_model_call = lifter_model_call
         self.ircfg = ircfg
         self.mn = mn
         self.stk_args = {'ARG%d' % i:i for i in range(10)}
@@ -50,7 +51,7 @@ class depGraphSettingsForm(ida_kernwin.Form):
         assert line_nb is not None
         cur_loc_key = str(cur_block.loc_key)
         loc_keys = sorted(map(str, ircfg.blocks))
-        regs = sorted(ira.arch.regs.all_regs_ids_byname)
+        regs = sorted(lifter_model_call.arch.regs.all_regs_ids_byname)
         regs += list(self.stk_args)
         reg_default = regs[0]
         for i in range(10):
@@ -128,14 +129,14 @@ Method to use:
         if value in self.stk_args:
             line = self.ircfg.blocks[self.loc_key][self.line_nb].instr
             arg_num = self.stk_args[value]
-            stk_high = m2_expr.ExprInt(idc.get_spd(line.offset), ir_arch.sp.size)
-            stk_off = m2_expr.ExprInt(self.ira.sp.size // 8 * arg_num, ir_arch.sp.size)
-            element =  m2_expr.ExprMem(self.mn.regs.regs_init[ir_arch.sp] + stk_high + stk_off, self.ira.sp.size)
+            stk_high = m2_expr.ExprInt(idc.get_spd(line.offset), lifter.sp.size)
+            stk_off = m2_expr.ExprInt(self.lifter_model_call.sp.size // 8 * arg_num, lifter.sp.size)
+            element =  m2_expr.ExprMem(self.mn.regs.regs_init[lifter.sp] + stk_high + stk_off, self.lifter_model_call.sp.size)
             element = expr_simp(element)
             # Force stack unaliasing
             self.stk_unalias_force = True
         elif value:
-            element = self.ira.arch.regs.all_regs_ids_byname.get(value, None)
+            element = self.lifter_model_call.arch.regs.all_regs_ids_byname.get(value, None)
 
         else:
             raise ValueError("Unknown element '%s'!" % value)
@@ -167,7 +168,7 @@ def clean_lines():
 
 def treat_element():
     "Display an element"
-    global graphs, comments, sol_nb, settings, addr, ir_arch, ircfg
+    global graphs, comments, sol_nb, settings, addr, lifter, ircfg
 
     try:
         graph = next(graphs)
@@ -194,7 +195,7 @@ def treat_element():
     if graph.has_loop:
         print('Graph has dependency loop: symbolic execution is inexact')
     else:
-        print("Possible value: %s" % next(iter(viewvalues(graph.emul(ir_arch)))))
+        print("Possible value: %s" % next(iter(viewvalues(graph.emul(lifter)))))
 
     for offset, elements in viewitems(comments):
         idc.set_cmt(offset, ", ".join(map(str, elements)), 0)
@@ -206,50 +207,52 @@ def next_element():
 
 
 def launch_depgraph():
-    global graphs, comments, sol_nb, settings, addr, ir_arch, ircfg
+    global graphs, comments, sol_nb, settings, addr, lifter, ircfg
     # Get the current function
     addr = idc.get_screen_ea()
     func = ida_funcs.get_func(addr)
 
     # Init
     machine = guess_machine(addr=func.start_ea)
-    mn, dis_engine, ira = machine.mn, machine.dis_engine, machine.ira
+    mn, dis_engine, lifter_model_call = machine.mn, machine.dis_engine, machine.lifter_model_call
 
     bs = bin_stream_ida()
-    mdis = dis_engine(bs, dont_dis_nulstart_bloc=True)
-    ir_arch = ira(mdis.loc_db)
+    loc_db = LocationDB()
+
+    mdis = dis_engine(bs, loc_db=loc_db, dont_dis_nulstart_bloc=True)
+    lifter = lifter_model_call(loc_db)
 
     # Populate symbols with ida names
     for ad, name in idautils.Names():
         if name is None:
             continue
-        mdis.loc_db.add_location(name, ad)
+        loc_db.add_location(name, ad)
 
     asmcfg = mdis.dis_multiblock(func.start_ea)
 
     # Generate IR
-    ircfg = ir_arch.new_ircfg_from_asmcfg(asmcfg)
+    ircfg = lifter.new_ircfg_from_asmcfg(asmcfg)
 
     # Get settings
-    settings = depGraphSettingsForm(ir_arch, ircfg, mn)
+    settings = depGraphSettingsForm(lifter, ircfg, mn)
     settings.Execute()
 
     loc_key, elements, line_nb = settings.loc_key, settings.elements, settings.line_nb
     # Simplify assignments
     for irb in list(viewvalues(ircfg.blocks)):
         irs = []
-        offset = ir_arch.loc_db.get_location_offset(irb.loc_key)
+        offset = loc_db.get_location_offset(irb.loc_key)
         fix_stack = offset is not None and settings.unalias_stack
         for assignblk in irb:
             if fix_stack:
-                stk_high = m2_expr.ExprInt(idc.get_spd(assignblk.instr.offset), ir_arch.sp.size)
-                fix_dct = {ir_arch.sp: mn.regs.regs_init[ir_arch.sp] + stk_high}
+                stk_high = m2_expr.ExprInt(idc.get_spd(assignblk.instr.offset), lifter.sp.size)
+                fix_dct = {lifter.sp: mn.regs.regs_init[lifter.sp] + stk_high}
 
             new_assignblk = {}
             for dst, src in viewitems(assignblk):
                 if fix_stack:
                     src = src.replace_expr(fix_dct)
-                    if dst != ir_arch.sp:
+                    if dst != lifter.sp:
                         dst = dst.replace_expr(fix_dct)
                 dst, src = expr_simp(dst), expr_simp(src)
                 new_assignblk[dst] = src
@@ -259,7 +262,7 @@ def launch_depgraph():
     # Get dependency graphs
     dg = settings.depgraph
     graphs = dg.get(loc_key, elements, line_nb,
-                    set([ir_arch.loc_db.get_offset_location(func.start_ea)]))
+                    set([loc_db.get_offset_location(func.start_ea)]))
 
     # Display the result
     comments = {}

@@ -1736,7 +1736,9 @@ simm6 = bs(l=6, cls=(aarch64_int64_noarg, aarch64_arg), fname="imm", order=-1)
 simm9 = bs(l=9, cls=(aarch64_int64_noarg,), fname="imm", order=-1)
 simm7 = bs(l=7, cls=(aarch64_int64_noarg,), fname="imm", order=-1)
 nzcv = bs(l=4, cls=(aarch64_uint64_noarg, aarch64_arg), fname="nzcv", order=-1)
+uimm4 = bs(l=4, cls=(aarch64_uint64_noarg, aarch64_arg), fname="imm", order=-1)
 uimm5 = bs(l=5, cls=(aarch64_uint64_noarg, aarch64_arg), fname="imm", order=-1)
+uimm6 = bs(l=6, cls=(aarch64_uint64_noarg, aarch64_arg), fname="imm", order=-1)
 uimm12 = bs(l=12, cls=(aarch64_uint64_noarg,), fname="imm", order=-1)
 uimm16 = bs(l=16, cls=(aarch64_uint64_noarg, aarch64_arg), fname="imm", order=-1)
 uimm7 = bs(l=7, cls=(aarch64_uint64_noarg,), fname="imm", order=-1)
@@ -2027,8 +2029,8 @@ bs_ldstp_name = bs_name(l=1, name=ldstp_name)
 aarch64op("ldstp", [sf, bs('0'), bs('101'), bs('0'), bs('0'), post_pre, bs('1'), bs_ldstp_name, simm7, rt2, rn64_deref_sf, rt], [rt, rt2, rn64_deref_sf])
 aarch64op("ldstp", [sf, bs('0'), bs('101'), bs('0'), bs('0'), bs('1'), bs('0'), bs_ldstp_name, simm7, rt2, rn64_deref_sf, rt], [rt, rt2, rn64_deref_sf])
 
-aarch64op("ldstp", [sdsize, bs('101'), bs('1'), bs('0'), post_pre, bs('1'), bs_ldstp_name, uimm7, sd2, rn64_deref_sd, sd1], [sd1, sd2, rn64_deref_sd])
-aarch64op("ldstp", [sdsize, bs('101'), bs('1'), bs('0'), bs('1'), bs('0'), bs_ldstp_name, uimm7, sd2, rn64_deref_sd, sd1], [sd1, sd2, rn64_deref_sd])
+aarch64op("ldstp", [sdsize, bs('101'), bs('1'), bs('0'), post_pre, bs('1'), bs_ldstp_name, simm7, sd2, rn64_deref_sd, sd1], [sd1, sd2, rn64_deref_sd])
+aarch64op("ldstp", [sdsize, bs('101'), bs('1'), bs('0'), bs('1'), bs('0'), bs_ldstp_name, simm7, sd2, rn64_deref_sd, sd1], [sd1, sd2, rn64_deref_sd])
 
 
 # data process p.207
@@ -2122,8 +2124,6 @@ aarch64op("msub",  [sf, bs('00'), bs('11011'), bs('000'), rm, bs('1'), ra, rn, r
 
 aarch64op("umulh", [bs('1'), bs('00'), bs('11011'), bs('110'), rm64, bs('0'), bs('11111'), rn64, rd64], [rd64, rn64, rm64])
 aarch64op("smulh", [bs('1'), bs('00'), bs('11011'), bs('010'), rm64, bs('0'), bs('11111'), rn64, rd64], [rd64, rn64, rm64])
-aarch64op("umsubh",[bs('1'), bs('00'), bs('11011'), bs('101'), rm32, bs('1'), ra64, rn32, rd64], [rd64, rn32, rm32, ra64])
-
 
 aarch64op("smaddl",[bs('1'), bs('00'), bs('11011'), bs('001'), rm32, bs('0'), ra64, rn32, rd64], [rd64, rn32, rm32, ra64])
 aarch64op("umaddl",[bs('1'), bs('00'), bs('11011'), bs('101'), rm32, bs('0'), ra64, rn32, rd64], [rd64, rn32, rm32, ra64])
@@ -2137,7 +2137,7 @@ aarch64op("udiv", [sf, bs('0'), bs('0'), bs('11010110'), rm, bs('00001'), bs('0'
 
 
 # extract register p.150
-aarch64op("extr", [sf, bs('00100111'), bs(l=1, cls=(aarch64_eq,), ref="sf"), bs('0'), rm, simm6, rn, rd], [rd, rn, rm, simm6])
+aarch64op("extr", [sf, bs('00100111'), bs(l=1, cls=(aarch64_eq,), ref="sf"), bs('0'), rm, uimm6, rn, rd], [rd, rn, rm, uimm6])
 
 # shift reg p.155
 shiftr_name = {'LSL': 0b00, 'LSR': 0b01, 'ASR': 0b10, 'ROR': 0b11}
@@ -2188,10 +2188,17 @@ aarch64op("stlxrb",[bs('0'), bs('0'), bs('001000'), bs('0'), bs('0'), bs('0'), r
 aarch64op("stlxrh",[bs('0'), bs('1'), bs('001000'), bs('0'), bs('0'), bs('0'), rs32, bs('1'), bs('11111'), rn64_deref_nooff, rt32], [rs32, rt32, rn64_deref_nooff])
 aarch64op("stlxp", [bs('1'), sf, bs('001000'), bs('0'), bs('0'), bs('1'), rs32, bs('1'), rt2, rn64_deref_nooff, rt], [rs32, rt, rt2, rn64_deref_nooff])
 
+aarch64op("stlrb",[bs('0'), bs('0'), bs('001000'), bs('1'), bs('0'), bs('0'), bs('11111'), bs('1'), bs('11111'), rn64_deref_nooff, rt32], [rt32, rn64_deref_nooff])
+
 # barriers p.135
 aarch64op("dsb", [bs('1101010100'), bs('0000110011'), crm, bs('1'), bs('00'), bs('11111')], [crm])
 aarch64op("dmb", [bs('1101010100'), bs('0000110011'), crm, bs('1'), bs('01'), bs('11111')], [crm])
 aarch64op("isb", [bs('1101010100'), bs('0000110011'), crm, bs('1'), bs('10'), bs('11111')], [crm])
+aarch64op("ic",  [bs('1101010100'), bs('0'), bs('01'), op1, bs('0111'), crm, op2, rt64], [op1, crm, op2, rt64])
+aarch64op('clrex', [bs('1101010100'), bs('0'), bs('00'), bs('011'), bs('0011'), uimm4, bs('010'), bs('11111')], [uimm4])
+aarch64op("tlbi", [bs('1101010100'), bs('0'), bs('01'), op1, bs('1000'), crm, op2, rt64], [op1, crm, op2, rt64])
+aarch64op('yield', [bs('1101010100'), bs('0'), bs('00'), bs('011'), bs('0010'), bs('0000'), bs('001'), bs('11111')], [])
+
 
 stacctype = bs_mod_name(l=1, fname='order', mn_mod=['', 'L'])
 ltacctype = bs_mod_name(l=1, fname='order', mn_mod=['', 'A'])

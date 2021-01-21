@@ -71,28 +71,34 @@ def simp_cst_propagation(e_s, expr):
                 shifter = int(int2) % int2.size
                 out = (int(int1) << shifter) | (int(int1) >> (int2.size - shifter))
             elif op_name == '/':
-                assert int(int2), "division by 0"
+                if int(int2) == 0:
+                    return expr
                 out = int(int1) // int(int2)
             elif op_name == '%':
-                assert int(int2), "division by 0"
+                if int(int2) == 0:
+                    return expr
                 out = int(int1) % int(int2)
             elif op_name == 'sdiv':
-                assert int(int2), "division by 0"
+                if int(int2) == 0:
+                    return expr
                 tmp1 = mod_size2int[int1.size](int(int1))
                 tmp2 = mod_size2int[int2.size](int(int2))
                 out = mod_size2uint[int1.size](tmp1 // tmp2)
             elif op_name == 'smod':
-                assert int(int2), "division by 0"
+                if int(int2) == 0:
+                    return expr
                 tmp1 = mod_size2int[int1.size](int(int1))
                 tmp2 = mod_size2int[int2.size](int(int2))
                 out = mod_size2uint[int1.size](tmp1 % tmp2)
             elif op_name == 'umod':
-                assert int(int2), "division by 0"
+                if int(int2) == 0:
+                    return expr
                 tmp1 = mod_size2uint[int1.size](int(int1))
                 tmp2 = mod_size2uint[int2.size](int(int2))
                 out = mod_size2uint[int1.size](tmp1 % tmp2)
             elif op_name == 'udiv':
-                assert int(int2), "division by 0"
+                if int(int2) == 0:
+                    return expr
                 tmp1 = mod_size2uint[int1.size](int(int1))
                 tmp2 = mod_size2uint[int2.size](int(int2))
                 out = mod_size2uint[int1.size](tmp1 // tmp2)
@@ -594,6 +600,14 @@ def simp_compose(e_s, expr):
                 args = args[:i] + [ExprMem(arg.ptr,
                                           arg.size + nxt.size)] + args[i + 2:]
                 return ExprCompose(*args)
+    # {A, signext(A)[32:64]} => signext(A)
+    if len(args) == 2 and args[0].size == args[1].size:
+        arg1, arg2 = args
+        size = arg1.size
+        sign_ext = arg1.signExtend(arg1.size*2)
+        if arg2 == sign_ext[size:2*size]:
+            return sign_ext
+
 
     # {a, x?b:d, x?c:e, f} => x?{a, b, c, f}:{a, d, e, f}
     conds = set(arg.cond for arg in expr.args if arg.is_cond())
@@ -845,6 +859,17 @@ def simp_cc_conds(_, expr):
             ExprInt(1, expr.size)
         )
 
+    elif (expr.is_op("CC_S>=") and
+          len(expr.args) == 2 and
+          expr.args[0].is_op("FLAG_SIGN_SUB") and
+          expr.args[0].args[1].is_int(0) and
+          expr.args[1].is_int(0)):
+        expr = ExprOp(
+            TOK_INF_EQUAL_SIGNED,
+            expr.args[0].args[1],
+            expr.args[0].args[0],
+        )
+
     elif (expr.is_op("CC_S<") and
           test_cc_eq_args(
               expr,
@@ -939,6 +964,18 @@ def simp_cond_cc_flag(expr_simp, expr):
     if expr_op.op == "CC_U>=":
         return ExprCond(arg, expr.src2, expr.src1)
     return expr
+
+def simp_cond_sub_cf(expr_simp, expr):
+    """
+    ExprCond(FLAG_SUB_CF(A, B), X, Y) => ExprCond(A <u B, X, Y)
+    """
+    if not expr.is_cond():
+        return expr
+    if not expr.cond.is_op("FLAG_SUB_CF"):
+        return expr
+    cond = ExprOp(TOK_INF_UNSIGNED, *expr.cond.args)
+    return ExprCond(cond, expr.src1, expr.src2)
+
 
 def simp_cmp_int(expr_simp, expr):
     """
@@ -1443,6 +1480,23 @@ def simp_slice_of_ext(_, expr):
         return arg.zeroExtend(expr.stop)
     return expr
 
+def simp_slice_of_sext(e_s, expr):
+    """
+    with Y <= size(A)
+    A.signExt(X)[0:Y] => A[0:Y]
+    """
+    if not expr.arg.is_op():
+        return expr
+    if not expr.arg.op.startswith("signExt"):
+        return expr
+    arg = expr.arg.args[0]
+    if expr.start != 0:
+        return expr
+    if expr.stop <= arg.size:
+        return e_s.expr_simp(arg[:expr.stop])
+    return expr
+
+
 def simp_slice_of_op_ext(expr_s, expr):
     """
     (X.zeroExt() + {Z, } + ... + Int)[0:8] => X + ... + int[:]
@@ -1763,3 +1817,36 @@ def simp_bcdadd(_, expr):
             carry = 0
         res += j << i
     return ExprInt(res, arg1.size)
+
+
+def simp_smod_sext(expr_s, expr):
+    """
+    a.size == b.size
+    smod(a.signExtend(X), b.signExtend(X)) => smod(a, b).signExtend(X)
+    """
+    if not expr.is_op("smod"):
+        return expr
+    arg1, arg2 = expr.args
+    if arg1.is_op() and arg1.op.startswith("signExt"):
+        src1 = arg1.args[0]
+        if arg2.is_op() and arg2.op.startswith("signExt"):
+            src2 = arg2.args[0]
+            if src1.size == src2.size:
+                # Case: a.signext(), b.signext()
+                return ExprOp("smod", src1, src2).signExtend(expr.size)
+            return expr
+        elif arg2.is_int():
+            src2 = expr_s.expr_simp(arg2[:src1.size])
+            if expr_s.expr_simp(src2.signExtend(arg2.size)) == arg2:
+                # Case: a.signext(), int
+                return ExprOp("smod", src1, src2).signExtend(expr.size)
+            return expr
+    # Case: int        , b.signext()
+    if arg2.is_op() and arg2.op.startswith("signExt"):
+        src2 = arg2.args[0]
+        if arg1.is_int():
+            src1 = expr_s.expr_simp(arg1[:src2.size])
+            if expr_s.expr_simp(src1.signExtend(arg1.size)) == arg1:
+                # Case: int, b.signext()
+                return ExprOp("smod", src1, src2).signExtend(expr.size)
+    return expr
